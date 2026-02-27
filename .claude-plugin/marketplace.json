@@ -10,7 +10,7 @@
   },
   "plugins": [
     {
-      "name": "tt-tron-agents",
+      "name": "awesome-tron-agents",
       "source": "./agents",
       "description": "Expert agents for TRON DApp development — TronWeb usage patterns and Transatron fee optimization integration",
       "version": "1.0.0",

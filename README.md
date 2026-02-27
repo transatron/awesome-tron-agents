@@ -9,13 +9,24 @@ Specialized Claude Code agents for TRON blockchain development. Get expert guida
 
 ## Installation
 
+### As Claude Code Plugin (Recommended)
+
+Add the marketplace, then install the plugin:
+
+```
+/plugin marketplace add transatron/awesome-tron-agents
+/plugin install awesome-tron-agents
+```
+
+Claude Code clones the repo, registers the catalog from `.claude-plugin/marketplace.json`, and copies the agents into its plugin cache. No manual file copying needed.
+
 ### Interactive Installer
 
 Clone the repo and run the installer to pick agents and installation scope (global/local):
 
 ```bash
 git clone https://github.com/transatron/awesome-tron-agents.git
-cd tt-agents-plugin
+cd awesome-tron-agents
 ./install-agents.sh
 ```
 
@@ -35,24 +46,6 @@ Copy the agent files into your project:
 mkdir -p .claude/agents
 cp agents/tronweb-developer.md .claude/agents/
 cp agents/transatron-integrator.md .claude/agents/
-```
-
-### As a plugin
-
-Add to your Claude Code settings (`.claude/settings.json`):
-
-```json
-{
-  "plugins": [
-    "/path/to/tt-agents-plugin/agents"
-  ]
-}
-```
-
-### From the marketplace
-
-```
-claude install tt-tron-agents
 ```
 
 ## Usage
