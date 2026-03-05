@@ -157,46 +157,19 @@ Transatron issues two key types per account:
 
 API registration creates an account in a single API call — ideal for automation. See the `transatron-integrator` agent for implementation details.
 
-## Common Concerns and Answers
+## Common Concerns
 
-**"What if Transatron goes down?"**
-Transactions fall back to standard TRON behavior — TRX burns from the sender wallet. Maintain a small TRX buffer (1–3 TRX on active wallets, up to 100 TRX on hot wallets) as a safety net.
-
-**"Is it safe to route all traffic through a third party?"**
-Transatron never holds private keys. It only sees signed transactions (which are already public once broadcast). The proxy adds resources, it doesn't modify transaction data.
-
-**"Will my transaction hashes change?"**
-No. Transaction IDs are determined by the signed content, which Transatron doesn't alter.
-
-**"Can I use Transatron for some transactions and TronGrid for others?"**
-Yes. You can maintain multiple TronWeb instances with different endpoints and route selectively.
-
-**"What about transaction speed?"**
-Standard and instant payment transactions have the same on-chain confirmation time as regular TRON transactions. Delayed transactions are intentionally deferred for batching.
-
-**"Does it work with all TRC20 tokens?"**
-Yes. Energy coverage works for any smart contract interaction, including shielded TRC20 operations. For instant payments, only TRX and USDT are accepted as fee payment currencies.
-
-**"Does it work with shielded (privacy) transactions?"**
-Yes. See the `tron-integrator-shieldedusdt` agent for implementation details on shielded mint, transfer, and burn operations with Transatron fee coverage.
-
-**"Does Transatron support special use cases like providing TRX for calldata?"**
-Yes. If a transaction's `call_value` is up to 30 TRX, Transatron charges the user for the TRX amount and tops up their account before broadcast. Real-world example: USDT0 (LayerZero OFT) bridging where LayerZero charges a few TRX as a cross-chain messaging fee. See the `tron-integrator-usdt0` agent for implementation details.
-
-**"How does Transatron pricing work?"**
-Pricing is consumption-based — charges reflect energy and bandwidth usage, not TRX expenditure. When TRX is required directly (e.g., `call_value` in calldata or new address activation), Transatron charges for the TRX at a 1:1 ratio.
-
-**"Can I submit the same transaction to both Transatron and another node?"**
-No. Energy and bandwidth assigned by Transatron remain valid, but if the transaction reaches the network before Transatron assigns resources, it can result in TRX burning or an OutOfEnergy error. Never submit the same transaction to multiple RPCs simultaneously.
-
-**"Does Transatron batch my transactions?"**
-Yes. Consecutive submissions trigger automatic batching (3→5→20→50 transactions). This means one delegate operation covers multiple user transactions, followed by a single reclaim. Batching reduces operational overhead and is transparent to the caller.
-
-**"Why is Transatron delegating too much energy?"**
-Transatron uses `fee_limit` to determine how much energy to delegate. If your `fee_limit` is hardcoded too high, Transatron will over-delegate. Always estimate energy via `triggerconstantcontract` and calculate `fee_limit` from chain parameters — never hardcode it.
-
-**"I have funds on the Dashboard but transactions fail with a balance error"**
-This typically means you are using a non-spender API key. The non-spender key does not charge fees from your internal account — it's designed for instant payments and coupon redemption. Switch to the spender key for account payment mode.
+- **Downtime fallback:** Transactions fall back to standard TRON behavior (TRX burn). Maintain a small TRX buffer as a safety net.
+- **Security:** Transatron never holds private keys — it only sees already-signed transactions. Transaction hashes don't change.
+- **Selective routing:** Yes — maintain multiple TronWeb instances and route per-transaction.
+- **Speed:** Same confirmation time as regular TRON. Delayed transactions are intentionally deferred.
+- **Token support:** Any smart contract interaction. Instant fee payments accept TRX and USDT. Shielded TRC20 supported (see `tron-integrator-shieldedusdt`).
+- **call_value top-up:** Up to 30 TRX — enables gasless UX for payable functions like USDT0 bridging (see `tron-integrator-usdt0`).
+- **Pricing:** Consumption-based (energy + bandwidth). Direct TRX needs (call_value, account activation) charged 1:1.
+- **Never dual-submit:** Don't send the same tx to both Transatron and another node — causes TRX burn or OutOfEnergy.
+- **Batching:** Automatic (3→5→20→50 txs). Transparent to the caller.
+- **Over-delegation:** Caused by hardcoded/oversized `fee_limit`. Always estimate via `triggerconstantcontract`.
+- **Balance errors with funds:** Likely using non-spender key — switch to spender key for account payment mode.
 
 ## Call Value Top-Up
 

@@ -23,162 +23,19 @@ USDT0 is a LayerZero OFT (Omnichain Fungible Token) deployed on TRON that enable
 
 Key difference from regular TRC-20: a standard `transfer()` only needs energy. USDT0 `send()` needs energy **plus** TRX as `call_value` for LayerZero's cross-chain messaging fee. This has UX implications — the sender must hold TRX even for a "token-only" bridge.
 
-## ABI
+## Contract Functions
 
-```typescript
-export const USDT0_ABI = [
-  {
-    type: "function",
-    name: "quoteOFT",
-    stateMutability: "view",
-    inputs: [
-      {
-        name: "_sendParam",
-        type: "tuple",
-        components: [
-          { name: "dstEid", type: "uint32" },
-          { name: "to", type: "bytes32" },
-          { name: "amountLD", type: "uint256" },
-          { name: "minAmountLD", type: "uint256" },
-          { name: "extraOptions", type: "bytes" },
-          { name: "composeMsg", type: "bytes" },
-          { name: "oftCmd", type: "bytes" },
-        ],
-      },
-    ],
-    outputs: [
-      {
-        name: "oftLimit",
-        type: "tuple",
-        components: [
-          { name: "minAmountLD", type: "uint256" },
-          { name: "maxAmountLD", type: "uint256" },
-        ],
-      },
-      {
-        name: "oftFeeDetails",
-        type: "tuple[]",
-        components: [
-          { name: "eid", type: "uint32" },
-          { name: "feeAmount", type: "uint256" },
-        ],
-      },
-      {
-        name: "oftReceipt",
-        type: "tuple",
-        components: [
-          { name: "amountSentLD", type: "uint256" },
-          { name: "amountReceivedLD", type: "uint256" },
-          { name: "feeLD", type: "uint256" },
-        ],
-      },
-    ],
-  },
-  {
-    constant: true,
-    inputs: [
-      { name: "owner", type: "address" },
-      { name: "spender", type: "address" },
-    ],
-    name: "allowance",
-    outputs: [{ name: "", type: "uint256" }],
-    type: "function",
-  },
-  {
-    type: "function",
-    name: "feeBps",
-    stateMutability: "view",
-    inputs: [],
-    outputs: [{ type: "uint16" }],
-  },
-  {
-    type: "function",
-    name: "quoteSend",
-    stateMutability: "view",
-    inputs: [
-      {
-        name: "_sendParam",
-        type: "tuple",
-        components: [
-          { name: "dstEid", type: "uint32" },
-          { name: "to", type: "bytes32" },
-          { name: "amountLD", type: "uint256" },
-          { name: "minAmountLD", type: "uint256" },
-          { name: "extraOptions", type: "bytes" },
-          { name: "composeMsg", type: "bytes" },
-          { name: "oftCmd", type: "bytes" },
-        ],
-      },
-      { name: "_payInLzToken", type: "bool" },
-    ],
-    outputs: [
-      {
-        name: "msgFee",
-        type: "tuple",
-        components: [
-          { name: "nativeFee", type: "uint256" },
-          { name: "lzTokenFee", type: "uint256" },
-        ],
-      },
-    ],
-  },
-  {
-    type: "function",
-    name: "send",
-    stateMutability: "payable",
-    inputs: [
-      {
-        name: "_sendParam",
-        type: "tuple",
-        components: [
-          { name: "dstEid", type: "uint32" },
-          { name: "to", type: "bytes32" },
-          { name: "amountLD", type: "uint256" },
-          { name: "minAmountLD", type: "uint256" },
-          { name: "extraOptions", type: "bytes" },
-          { name: "composeMsg", type: "bytes" },
-          { name: "oftCmd", type: "bytes" },
-        ],
-      },
-      {
-        name: "_fee",
-        type: "tuple",
-        components: [
-          { name: "nativeFee", type: "uint256" },
-          { name: "lzTokenFee", type: "uint256" },
-        ],
-      },
-      { name: "_refundAddress", type: "address" },
-    ],
-    outputs: [
-      {
-        name: "msgReceipt",
-        type: "tuple",
-        components: [
-          { name: "nonce", type: "uint64" },
-          { name: "guid", type: "bytes32" },
-          {
-            name: "fee",
-            type: "tuple",
-            components: [
-              { name: "nativeFee", type: "uint256" },
-              { name: "lzTokenFee", type: "uint256" },
-            ],
-          },
-        ],
-      },
-      {
-        name: "oftReceipt",
-        type: "tuple",
-        components: [
-          { name: "amountSentLD", type: "uint256" },
-          { name: "amountReceivedLD", type: "uint256" },
-        ],
-      },
-    ],
-  },
-];
-```
+The USDT0 contract exposes these key functions. All share a common `SendParam` tuple: `(uint32 dstEid, bytes32 to, uint256 amountLD, uint256 minAmountLD, bytes extraOptions, bytes composeMsg, bytes oftCmd)`.
+
+| Function | Type | Input | Returns |
+|----------|------|-------|---------|
+| `quoteOFT(SendParam)` | view | SendParam | oftLimit (min/max), oftFeeDetails[], oftReceipt (sent/received/fee) |
+| `quoteSend(SendParam, bool _payInLzToken)` | view | SendParam + bool | msgFee (nativeFee, lzTokenFee) |
+| `send(SendParam, MessagingFee, address _refundAddress)` | payable | SendParam + (nativeFee, lzTokenFee) + refund addr | msgReceipt (nonce, guid, fee) + oftReceipt |
+| `feeBps()` | view | — | uint16 (fee basis points) |
+| `allowance(address, address)` | view | owner, spender | uint256 |
+
+When writing code, build the ABI array from these signatures. The `send()` function signature for `triggerSmartContract` is: `send((uint32,bytes32,uint256,uint256,bytes,bytes,bytes),(uint256,uint256),address)`
 
 ## Destination Address Encoding
 

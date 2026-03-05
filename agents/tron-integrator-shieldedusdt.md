@@ -295,8 +295,8 @@ async function prepareShieldedTransfer(
 // 6. Build on-chain transaction with dynamic feeLimit
 const energyUsed = check.energy_used || 131_000;
 const chainParams = await tronWeb.trx.getChainParameters();
-const energyFee = chainParams.find(p => p.key === 'getEnergyFee')?.value ?? 420;
-const feeLimit = Math.ceil(energyUsed * energyFee * 1.2);
+const energyFee = chainParams.find(p => p.key === 'getEnergyFee')?.value ?? 100;
+const feeLimit = Math.ceil(energyUsed * energyFee * 1.001);
 
 const { transaction } = await tronWeb.fullNode.request<any>(
   'wallet/triggersmartcontract',
@@ -508,80 +508,13 @@ Shielded operations work with Transatron fee optimization:
 
 See the `transatron-integrator` agent for full coupon and account payment implementation.
 
-## TypeScript Types
+## Key Types
 
-```typescript
-interface ResGenerateZkey {
-  sk: string;
-  ask: string;
-  nsk: string;
-  ovk: string;
-  ak: string;
-  nk: string;
-  ivk: string;
-  d: string;
-  pkD: string;
-  payment_address: string;
-}
-
-interface ShieldedMint {
-  owner: string;
-  amount: string | number;
-  paymentAddress: string;  // z-addr
-  shieldedContract: string;
-}
-
-interface ShieldedTransfer {
-  notes: NoteEntry[];
-  to: { amount: string | number; paymentAddress: string };
-  zkyAddress: ResGenerateZkey;
-  contractAddress: string;
-}
-
-interface ShieldedBurn {
-  notes: NoteEntry[];
-  to: { amount: string | number; paymentAddress: string }; // transparent t-addr
-  zkyAddress: ResGenerateZkey;
-  contractAddress: string;
-}
-
-interface Note {
-  value: number | string;
-  payment_address: string;
-  rcm: string;
-  memo?: string;
-}
-
-interface NoteEntry {
-  note: Note;
-  position: number;
-  is_spent: boolean;
-}
-
-interface Notes {
-  shieldedContractAddress: string;
-  data: NoteEntry[];
-}
-
-interface GetIncomingNotes {
-  start_block_index: number;
-  end_block_index: number;
-  shielded_TRC20_contract_address: string;
-  ivk: string;
-  ak: string;
-  nk: string;
-}
-
-interface ResCreateshielDedcontractParameters {
-  trigger_contract_input: string;
-  Error?: string;
-}
-
-interface ResPrepareShielded {
-  check: any;
-  parameter: string;
-}
-```
+- **ResGenerateZkey** — all key fields from `wallet/getnewshieldedaddress`: `sk`, `ask`, `nsk`, `ovk`, `ak`, `nk`, `ivk`, `d`, `pkD`, `payment_address`
+- **Note** — `value`, `payment_address`, `rcm`, `memo?`
+- **NoteEntry** — `note: Note`, `position: number`, `is_spent: boolean`
+- **ShieldedMint/Transfer/Burn** — operation payloads using notes + `zkyAddress: ResGenerateZkey` + `contractAddress`
+- **ResCreateshielDedcontractParameters** — `trigger_contract_input: string`, `Error?: string`
 
 ## Critical Gotchas
 

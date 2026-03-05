@@ -11,47 +11,13 @@ Key reference: https://docs.transatron.io (append `.md` to sitemap URLs for raw 
 
 ## TronWeb Setup
 
-Transatron acts as a transparent proxy to TRON, adding `transatron` extension objects to API responses. Replace the standard `fullHost` and add an API key header:
-
-```typescript
-import { TronWeb, providers } from 'tronweb';
-
-const tronWeb = new TronWeb({
-  fullHost: new providers.HttpProvider('https://api.transatron.io', 30_000),
-  solidityNode: new providers.HttpProvider('https://api.transatron.io', 30_000),
-  disablePlugins: true,
-  headers: {
-    'TRANSATRON-API-KEY': process.env.TRANSATRON_API_KEY,
-    // 'TRON-PRO-API-KEY' also accepted
-  },
-});
-```
-
-**Production notes:**
-- Use `HttpProvider` with an explicit timeout (ms) to avoid hanging requests
-- Set `solidityNode` to the same Transatron URL for confirmed-block queries
-- Set `disablePlugins: true` to avoid loading unnecessary TronWeb plugins
+Use standard TronWeb init (see `tron-developer-tronweb`) but replace `fullHost` and `solidityNode` with `https://api.transatron.io` and add a `TRANSATRON-API-KEY` header (`TRON-PRO-API-KEY` also accepted).
 
 ### Dual-Instance Pattern (Server-Side)
 
-For server-side apps that need both spender and non-spender capabilities, create two TronWeb instances and route broadcasts based on whether energy subsidy should apply:
+For apps needing both spender and non-spender capabilities, create two TronWeb instances — one with each key — and route broadcasts based on whether energy subsidy should apply:
 
 ```typescript
-const payerTronWeb = new TronWeb({
-  fullHost: new providers.HttpProvider(TRANSATRON_URL, 30_000),
-  solidityNode: new providers.HttpProvider(TRANSATRON_URL, 30_000),
-  disablePlugins: true,
-  headers: { 'TRANSATRON-API-KEY': SPENDER_KEY },
-});
-
-const userTronWeb = new TronWeb({
-  fullHost: new providers.HttpProvider(TRANSATRON_URL, 30_000),
-  solidityNode: new providers.HttpProvider(TRANSATRON_URL, 30_000),
-  disablePlugins: true,
-  headers: { 'TRANSATRON-API-KEY': NON_SPENDER_KEY },
-});
-
-// Route broadcast based on energy subsidy flag
 async function broadcast(tx: any, isEnergyApplied: boolean) {
   const client = isEnergyApplied ? payerTronWeb : userTronWeb;
   const result = await client.trx.sendRawTransaction(tx);
@@ -297,25 +263,7 @@ function hexToUnicode(hex: string): string {
 
 ### Broadcast Polling
 
-After broadcasting, poll for the transaction receipt. Production pattern uses 1.5s intervals with up to 50 retries and checks `receipt.result` for definitive status:
-
-```typescript
-async function waitForTransatronResult(txId: string, tronWeb: TronWeb) {
-  for (let i = 0; i < 50; i++) {
-    await new Promise(r => setTimeout(r, 1500));
-    const info = await tronWeb.trx.getTransactionInfo(txId);
-    if (info?.id) {
-      // Check receipt for definitive outcome
-      if (info.receipt?.result === 'SUCCESS') return info;
-      if (info.receipt?.result === 'FAILED' || info.receipt?.result === 'REVERT') {
-        throw new Error(`Transaction ${txId} failed: ${info.receipt.result}`);
-      }
-      return info; // receipt exists but no explicit result field
-    }
-  }
-  throw new Error(`Transaction ${txId} not confirmed after 50 retries`);
-}
-```
+After broadcasting, poll `getTransactionInfo` with 1.5s intervals (up to 50 retries). Check `receipt.result` for `SUCCESS`/`FAILED`/`REVERT`. See `tron-developer-tronweb` for the `waitForConfirmation` implementation.
 
 ### Fee Priority Order
 
@@ -356,24 +304,7 @@ const bandwidthFee = bandwidth * bandwidthPrice; // from getChainParameters()
 
 ### Energy Fallback
 
-When energy estimation fails or returns 0, use operation-specific fallbacks for USDT (all include 4.4x dynamic penalty):
-
-```typescript
-// USDT transfer / transferFrom with max-approval fallback:
-// 131,000 covers worst case first-time recipient (~130,285 actual)
-const transferEnergyEstimate = energy_used || 131_000;
-
-// USDT transferFrom with finite approval (allowance decrement):
-// 156,000 covers worst case first-time + allowance write (~155,325 actual)
-const transferFromEnergyEstimate = energy_used || 156_000;
-
-// USDT approve (set/update) fallback: 100,000 covers ~99,764 actual
-const approveEnergyEstimate = energy_used || 100_000;
-```
-
-For non-USDT TRC-20 tokens without dynamic energy penalty, base energy is much lower. See `tron-integrator-trc20` for the full energy reference tables and operation-specific fallback values. Always prefer `triggerconstantcontract` estimation over fallback values.
-
-For shielded TRC20 post-burn energy estimation (250k fallback), see the `tron-integrator-shieldedusdt` agent.
+When energy estimation fails or returns 0, use operation-specific fallbacks. See `tron-integrator-trc20` for the `USDT_ENERGY_FALLBACKS` map (transfer: 131k, transferFrom finite: 156k, approve: 100k). For shielded TRC20 post-burn scenarios, see `tron-integrator-shieldedusdt` (250k fallback). Always prefer `triggerconstantcontract` estimation over fallback values.
 
 ### Cashback Pricing
 
@@ -396,62 +327,13 @@ All endpoints are on the Transatron `fullHost` base URL.
 
 ## TypeScript Types
 
-When working with Transatron-extended responses, define these types:
+Key Transatron response fields to type when writing integration code:
 
-```typescript
-interface TransatronFeeQuote {
-  fee_trx: number;              // fee in SUN for TRX payment
-  fee_usdt: number;             // fee in micro-USDT
-  energy_needed: number;        // energy units required
-  message: string;              // hex-encoded message
-  tx_fee_rtrx_account: number;  // account-mode fee in TFN (SUN)
-  tx_fee_rusdt_account: number; // account-mode fee in TFU (micro-USDT)
-}
-
-interface TransatronBroadcastResult {
-  result: boolean;
-  txid: string;
-  transatron?: {
-    status: string;
-    fee_paid: number;
-    message: string; // hex-encoded
-  };
-}
-
-interface TransatronNodeInfo {
-  transatronInfo: {
-    deposit_address: string; // for instant payments
-    supported_tokens: string[];
-  };
-}
-
-interface SignedTransactionWithCoupon {
-  txID: string;
-  raw_data: any;
-  raw_data_hex: string;
-  signature: string[];
-  coupon?: string; // coupon ID for coupon payment mode
-}
-
-interface PendingTxsInfo {
-  address: string;
-  pending_count: number;
-  transactions: Array<{
-    txID: string;
-    expiration: number;
-    status: string;
-  }>;
-}
-
-interface MutableTransaction {
-  txID: string;
-  raw_data: {
-    expiration: number;
-    [key: string]: any;
-  };
-  raw_data_hex: string;
-}
-```
+- **Fee quote** (`transaction.transatron`): `fee_trx` (SUN), `fee_usdt` (micro-USDT), `energy_needed`, `message` (hex-encoded), `tx_fee_rtrx_account` (TFN SUN), `tx_fee_rusdt_account` (TFU micro-USDT)
+- **Broadcast result** (`transatron` extension): `status`, `fee_paid`, `message` (hex-encoded)
+- **Node info** (`transatronInfo`): `deposit_address`, `supported_tokens[]`
+- **Coupon**: attach as `signedTx.coupon = couponId` before broadcasting
+- **Pending txs**: `address`, `pending_count`, `transactions[]` with `txID`, `expiration`, `status`
 
 ## Agentic Registration (Programmatic Account Creation)
 
@@ -577,50 +459,7 @@ if (config.balance_rtrx < THRESHOLD_SUN) {
 
 ### USDT Replenishment
 
-USDT deposits credit the TFU balance. The flow is similar but uses a TRC20 transfer instead of a TRX transfer:
-
-```typescript
-const THRESHOLD_USDT = 300_000_000; // 300 TFU (6 decimals)
-const TOP_UP_USDT = 15_000_000;     // 15 USDT
-
-if (config.balance_rusdt < THRESHOLD_USDT) {
-  const depositAddress = config.payment_address;
-  const minDeposit = nodeInfo.transatronInfo.rusdt_min_deposit;
-  const depositAmount = Math.max(TOP_UP_USDT, minDeposit);
-
-  // Use standard TRC20 transfer flow: estimate energy → build with txLocal → sign → broadcast
-  const { energy_used } = await tronWeb.transactionBuilder.triggerConstantContract(
-    USDT_CONTRACT,
-    'transfer(address,uint256)',
-    {},
-    [
-      { type: 'address', value: depositAddress },
-      { type: 'uint256', value: depositAmount },
-    ],
-    senderAddress,
-  );
-
-  const params = await tronWeb.trx.getChainParameters();
-  const energyFee = params.find(p => p.key === 'getEnergyFee')?.value ?? 420;
-  const feeLimit = Math.ceil(energy_used * energyFee * 1.2);
-
-  const { transaction } = await tronWeb.transactionBuilder.triggerSmartContract(
-    USDT_CONTRACT,
-    'transfer(address,uint256)',
-    { feeLimit, callValue: 0, txLocal: true },
-    [
-      { type: 'address', value: depositAddress },
-      { type: 'uint256', value: depositAmount },
-    ],
-    senderAddress,
-  );
-
-  const signedTx = await tronWeb.trx.sign(transaction);
-  await tronWeb.trx.sendRawTransaction(signedTx);
-
-  // Wait ~10s for credit, then verify via /api/v1/config
-}
-```
+USDT deposits credit the TFU balance. Use the standard TRC-20 transfer flow (see `tron-integrator-trc20`) to send USDT to `payment_address`. Same threshold/min-deposit logic as TRX replenishment, but check `balance_rusdt` against `rusdt_min_deposit`.
 
 ### Key Notes
 

@@ -57,7 +57,7 @@ Network bandwidth staking pool: 43.2 billion units (`getTotalNetLimit`) distribu
 
 Energy is the TVM compute unit consumed by smart contract execution. There is no free energy allocation — every unit must come from staking or TRX burning.
 
-Network energy staking pool: 180 billion units (`getTotalEnergyLimit`) distributed daily among all energy stakers proportionally. Burn rate: `getEnergyFee` sun per unit (currently 420 sun). Both parameters are queryable via `getchainparameters`. Recovery follows the same 24-hour proportional window as bandwidth.
+Network energy staking pool: 180 billion units (`getTotalEnergyLimit`) distributed daily among all energy stakers proportionally. Burn rate: `getEnergyFee` sun per unit (currently 100 sun). Both parameters are queryable via `getchainparameters`. Recovery follows the same 24-hour proportional window as bandwidth.
 
 ### Stake 2.0 Mechanics
 
@@ -88,7 +88,7 @@ TRC-20 energy costs vary significantly by operation and recipient status. Key fa
 - **USDT dynamic penalty** applies 4.4x multiplier (energy_factor 3.4 at max)
 - Base energy ranges: `transfer` 13,500–29,650, `approve` 7,350–22,700, `transferFrom` 13,400–35,700
 
-For verified energy tables with exact numbers, USDT-specific costs, and operation-specific fallback values, delegate to `tron-integrator-trc20`.
+For TRC-20 implementation code, energy estimation patterns, and operation-specific fallback values, delegate to `tron-integrator-trc20`.
 
 **Complex interactions:** DeFi swaps, liquidity operations, multi-hop routes: 50,000–500,000+ energy depending on contract complexity.
 
@@ -174,29 +174,11 @@ Production note: The asymmetric increase/decrease rates mean that once a contrac
 
 ### Checking energy_factor
 
-`getcontractinfo` returns the current `energy_factor` for any contract address. Use this to understand the current penalty state before planning operations.
+`getcontractinfo` returns the current `energy_factor` for any contract. `triggerconstantcontract` returns `energy_penalty` already reflecting the dynamic multiplier — no manual calculation needed. Key chain parameters from `getchainparameters`: `getEnergyFee`, `getDynamicEnergyThreshold`, `getDynamicEnergyMaxFactor`, `getTransactionFee`, `getMaxFeeLimit`.
 
-`triggerconstantcontract` returns `energy_penalty` in its response — this value already reflects the dynamic multiplier, so no manual calculation is needed when estimating via constant calls.
+### Energy Consumption Priority
 
-Key chain parameters available from `getchainparameters`:
-- `getEnergyFee` — sun per energy unit for burning
-- `getDynamicEnergyThreshold` — energy usage threshold per cycle
-- `getDynamicEnergyIncreaseFactor` — penalty increase rate
-- `getDynamicEnergyMaxFactor` — maximum energy_factor cap
-- `getTransactionFee` — sun per bandwidth unit for burning
-- `getMaxFeeLimit` — network maximum fee_limit in sun
-
-### Energy Consumption Flow
-
-When a smart contract transaction executes, energy is consumed from sources in a specific priority chain:
-
-1. **Deployer's staked energy** — consumed first, up to `origin_energy_limit`. Critical: there is NO burn fallback for the deployer. If the deployer's staked energy is exhausted, their contribution silently caps at zero regardless of `consume_user_resource_percent`.
-2. **Caller's staked energy** — consumed next from the caller's own staked or delegated energy.
-3. **Caller's TRX burn** — if staked energy is insufficient, TRX is burned from the caller's balance at `getEnergyFee` sun per unit. The caller can always complete the transaction as long as they have sufficient TRX.
-
-The split between deployer and caller is governed by `consume_user_resource_percent`. However, a deployer with zero staked energy absorbs nothing regardless of the percentage setting — the entire cost falls to the caller.
-
-Architecture constraint: When deploying contracts, carefully model the expected energy subsidy. Setting a low `consume_user_resource_percent` without maintaining adequate staked energy provides no benefit to callers and creates false expectations about transaction costs.
+Energy is consumed in order: (1) deployer's staked energy (up to `origin_energy_limit`, NO burn fallback), (2) caller's staked/delegated energy, (3) caller's TRX burn at `getEnergyFee` per unit. The split is governed by `consume_user_resource_percent`, but a deployer with zero staked energy absorbs nothing regardless of the setting.
 
 ### fee_limit Sizing
 
@@ -210,7 +192,7 @@ Hard cap: 15,000 TRX (the `getMaxFeeLimit` chain parameter). Transactions exceed
 
 USDT on TRON is permanently at the maximum `energy_factor` (3.4, resulting in 4.4x base energy). This is a structural reality — USDT processes millions of transactions daily and will not drop below the dynamic energy threshold.
 
-Architecture constraint: When building systems that interact with USDT, always estimate per-transaction via `triggerconstantcontract` — never hardcode. The `energy_used` response already includes the dynamic penalty. For exact USDT energy numbers and operation-specific fallback values, delegate to `tron-integrator-trc20`.
+Architecture constraint: When building systems that interact with USDT, always estimate per-transaction via `triggerconstantcontract` — never hardcode. The `energy_used` response already includes the dynamic penalty. For TRC-20 implementation and fallback values, delegate to `tron-integrator-trc20`.
 
 Transatron insulates applications from dynamic energy multiplier volatility by providing energy at predictable per-transaction rates. For USDT-heavy workloads, this removes the need to manage staking positions sized for worst-case dynamic penalties. Delegate to `transatron-architect` for evaluation.
 

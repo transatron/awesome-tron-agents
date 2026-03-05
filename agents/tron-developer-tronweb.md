@@ -65,8 +65,8 @@ const { energy_used } = await tronWeb.transactionBuilder.triggerConstantContract
 
 // 2. Calculate fee_limit
 const chainParams = await tronWeb.trx.getChainParameters();
-const energyFee = chainParams.find(p => p.key === 'getEnergyFee')?.value ?? 420;
-const feeLimit = Math.ceil(energy_used * energyFee * 1.2);
+const energyFee = chainParams.find(p => p.key === 'getEnergyFee')?.value ?? 100;
+const feeLimit = Math.ceil(energy_used * energyFee * 1.001);
 
 // 3. Build locally
 const { transaction } = await tronWeb.transactionBuilder.triggerSmartContract(
