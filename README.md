@@ -1,11 +1,20 @@
-# TRON Agents Plugin for Claude Code
+# Awesome TRON Agents for Claude Code
 
-Specialized Claude Code agents for TRON blockchain development. Get expert guidance on TronWeb usage and Transatron integration while building TRON DApps.
+Specialized Claude Code agents for TRON blockchain development — architecture guidance, TronWeb SDK patterns, Transatron fee optimization, shielded transactions, and USDT0 cross-chain bridging.
 
 ## Agents
 
-- [**tronweb-developer**](agents/tronweb-developer.md) — TronWeb SDK expert for building TRON DApps, creating/signing/broadcasting transactions, wallet integration, and TRC20 token operations.
-- [**transatron-integrator**](agents/transatron-integrator.md) — Transatron (Transfer Edge) integration expert for TRON transaction fee optimization, fee payment modes, and reducing blockchain operation costs.
+### Architecture (advisory — no code)
+
+- [**tron-architect**](agents/tron-architect.md) — TRON platform architecture: resource model, energy/bandwidth economics, fee optimization strategy, smart contract lifecycle planning.
+- [**transatron-architect**](agents/transatron-architect.md) — Transatron (Transfer Edge) solutions architecture: integration pattern selection, payment mode decisions, call_value top-up, business trade-offs.
+
+### Implementation (writes code)
+
+- [**tron-developer-tronweb**](agents/tron-developer-tronweb.md) — TronWeb SDK: building/signing/broadcasting transactions, TRC-20 token operations, wallet integration (TronLink, WalletConnect, Ledger).
+- [**transatron-integrator**](agents/transatron-integrator.md) — Transatron implementation: fee payment modes (account, instant, coupon, delayed), balance replenishment, programmatic registration.
+- [**tron-integrator-shieldedusdt**](agents/tron-integrator-shieldedusdt.md) — Shielded TRC-20 privacy: zk-SNARK proof generation, mint/transfer/burn flows, note scanning.
+- [**tron-integrator-usdt0**](agents/tron-integrator-usdt0.md) — USDT0 (LayerZero OFT) cross-chain transfers: quoting fees, building send transactions, call_value handling for bridging to Ethereum/Solana/TON.
 
 ## Installation
 
@@ -18,7 +27,7 @@ Add the marketplace, then install the plugin:
 /plugin install awesome-tron-agents
 ```
 
-Claude Code clones the repo, registers the catalog from `.claude-plugin/marketplace.json`, and copies the agents into its plugin cache. No manual file copying needed.
+Claude Code clones the repo, registers the catalog from `.claude-plugin/marketplace.json`, and copies the agents into its plugin cache.
 
 ### Interactive Installer
 
@@ -40,19 +49,28 @@ chmod +x install-agents.sh
 
 ### Manual
 
-Copy the agent files into your project:
+Copy agent files into your Claude Code agents directory:
 
 ```bash
 mkdir -p .claude/agents
-cp agents/tronweb-developer.md .claude/agents/
-cp agents/transatron-integrator.md .claude/agents/
+cp agents/*.md .claude/agents/
 ```
 
 ## Usage
 
-Once installed, Claude Code will automatically route TRON-related questions to the appropriate agent. You can also invoke them directly:
+Once installed, Claude Code automatically routes TRON-related questions to the appropriate agent based on the task. You can also invoke them directly:
 
 ```
-/agents tronweb-developer
+/agents tron-architect
+/agents tron-developer-tronweb
+/agents transatron-architect
 /agents transatron-integrator
+/agents tron-integrator-shieldedusdt
+/agents tron-integrator-usdt0
 ```
+
+## References
+
+- [TronWeb SDK](https://tronweb.network/docu/docs/intro/)
+- [Transatron](https://docs.transatron.io)
+- [TRON Developer Docs](https://developers.tron.network/docs/)

@@ -25,11 +25,29 @@ INSTALL_MODE=""
 GITHUB_RAW_BASE="https://raw.githubusercontent.com/transatron/awesome-tron-agents/main"
 
 # Agent definitions (name, file, description)
-AGENT_FILES=("tronweb-developer.md" "transatron-integrator.md")
-AGENT_NAMES=("tronweb-developer" "transatron-integrator")
+AGENT_FILES=(
+  "tron-architect.md"
+  "tron-developer-tronweb.md"
+  "tron-integrator-shieldedusdt.md"
+  "tron-integrator-usdt0.md"
+  "transatron-architect.md"
+  "transatron-integrator.md"
+)
+AGENT_NAMES=(
+  "tron-architect"
+  "tron-developer-tronweb"
+  "tron-integrator-shieldedusdt"
+  "tron-integrator-usdt0"
+  "transatron-architect"
+  "transatron-integrator"
+)
 AGENT_DESCS=(
-  "TronWeb SDK — DApps, transactions, wallets, TRC20 tokens"
-  "Transatron — fee optimization, payment modes, energy subsidies"
+  "TRON architecture — resource model, fee optimization, smart contract strategy"
+  "TronWeb SDK — DApps, transactions, wallets, TRC-20 tokens"
+  "Shielded TRC-20 — zk-SNARK privacy, mint/transfer/burn"
+  "USDT0 (LayerZero OFT) — cross-chain bridging to ETH/SOL/TON"
+  "Transatron architecture — integration patterns, payment modes, trade-offs"
+  "Transatron implementation — fee payments, coupons, delayed transactions"
 )
 
 has_local_claude_dir() {

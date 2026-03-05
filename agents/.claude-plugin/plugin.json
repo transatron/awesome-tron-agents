@@ -9,9 +9,11 @@
   "repository": "https://github.com/transatron/awesome-tron-agents",
   "license": "MIT",
   "agents": [
-    "./tronweb-developer.md",
+    "./tron-developer-tronweb.md",
     "./transatron-integrator.md",
     "./transatron-architect.md",
-    "./tron-shielded-usdt-integrator.md"
+    "./tron-integrator-shieldedusdt.md",
+    "./tron-architect.md",
+    "./tron-integrator-usdt0.md"
   ]
 }
