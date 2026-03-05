@@ -241,13 +241,51 @@ const tx = await tronWeb.transactionBuilder._triggerSmartContractLocal(...args);
 
 ### Bandwidth Calculation
 
-Calculate bandwidth cost from the serialized transaction:
+Calculate bandwidth from the serialized transaction:
 
 ```typescript
 function calculateBandwidth(rawDataHex: string): number {
-  return rawDataHex.length / 2 + 65 + 64 + 5; // data + signature + overhead
+  return rawDataHex.length / 2 + 65 + 64 + 5; // data + signature + protobuf overhead
 }
 ```
+
+### Total Transaction Cost (TRX Burn)
+
+When TRX is burned (no staked resources), the total cost includes both energy and bandwidth:
+
+```typescript
+async function estimateTotalBurnTRX(
+  tronWeb: TronWeb,
+  contractAddress: string,
+  functionSelector: string,
+  parameters: any[],
+  senderAddress: string,
+  rawDataHex: string, // from the built transaction
+): Promise<{ energyBurnSun: number; bandwidthBurnSun: number; totalBurnTRX: number }> {
+  // 1. Estimate energy (includes dynamic penalty)
+  const { energy_used } = await tronWeb.transactionBuilder.triggerConstantContract(
+    contractAddress, functionSelector, {}, parameters, senderAddress
+  );
+
+  // 2. Get chain parameters
+  const chainParams = await tronWeb.trx.getChainParameters();
+  const energyFee = chainParams.find(p => p.key === 'getEnergyFee')?.value ?? 100;
+  const txFee = chainParams.find(p => p.key === 'getTransactionFee')?.value ?? 1000;
+
+  // 3. Calculate both components
+  const energyBurnSun = energy_used * energyFee;
+  const bandwidthBytes = calculateBandwidth(rawDataHex);
+  const bandwidthBurnSun = bandwidthBytes * txFee;
+
+  return {
+    energyBurnSun,
+    bandwidthBurnSun,
+    totalBurnTRX: (energyBurnSun + bandwidthBurnSun) / 1_000_000,
+  };
+}
+```
+
+Note: `fee_limit` only caps the energy burn. Bandwidth is charged separately and is not included in `fee_limit`. For accurate cost display, always calculate both. See `tron-architect` for the full cost breakdown including new account creation fees.
 
 ### Waiting for Transaction Confirmation
 

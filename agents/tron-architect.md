@@ -186,7 +186,33 @@ Calculate fee_limit as: `estimated_energy × getEnergyFee × 1.001` (0.1% buffer
 
 Since `triggerconstantcontract` already includes the dynamic energy penalty in its `energy_used` response, no additional multiplier is needed.
 
+Critical: `fee_limit` only caps the **energy** portion of the transaction cost. Bandwidth is charged separately and is NOT included in `fee_limit`.
+
 Hard cap: 15,000 TRX (the `getMaxFeeLimit` chain parameter). Transactions exceeding this limit are rejected. Unspent fee_limit is returned, but on revert the entire fee_limit is consumed — size it carefully.
+
+### Total Transaction Cost (TRX Burn)
+
+When a smart contract transaction burns TRX (no staked resources), the total cost is the sum of energy and bandwidth burns:
+
+```
+Energy burn  = energy_used × getEnergyFee                          (sun)
+Bandwidth burn = bandwidth_bytes × getTransactionFee                (sun)
+Total burn   = Energy burn + Bandwidth burn                         (sun)
+Total TRX    = Total burn / 1_000_000
+```
+
+- `energy_used` — from `triggerconstantcontract` (already includes dynamic penalty)
+- `bandwidth_bytes` — serialized transaction size: `raw_data_hex.length / 2 + 65 + 64 + 5` (data + signature + protobuf overhead). Typical smart contract tx: 300–400 bytes.
+- `getEnergyFee` — sun per energy unit (currently 100 sun), from `getchainparameters`
+- `getTransactionFee` — sun per bandwidth byte (currently 1000 sun = 0.001 TRX/byte), from `getchainparameters`
+
+For most smart contract calls, energy dominates (>95% of cost). Bandwidth adds ~0.3–0.4 TRX. But for accurate cost display to users, always include both.
+
+Additional costs that may apply:
+- **New account creation** — if the recipient address has never appeared on-chain, TRON charges 1 TRX (`getCreateNewAccountFeeInSystemContract`) plus 0.1 TRX activation bandwidth (`getCreateAccountFee`). This is on top of energy + bandwidth.
+- **call_value** — TRX sent within the transaction (e.g., LayerZero messaging fees). This is a direct TRX transfer, not a resource burn.
+
+For implementation code, delegate to `tron-developer-tronweb`.
 
 ### USDT and High-Traffic Contracts
 

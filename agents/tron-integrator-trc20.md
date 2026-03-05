@@ -17,6 +17,8 @@ Always estimate energy per-transaction via `triggerconstantcontract` — never h
 - **`transferFrom` with finite approval** (+5,500 base): writes to allowance mapping. `type(uint256).max` approval skips this — saves ~24k USDT energy per call
 - **`approve` revoke** (N->0) is ~3x cheaper than set/update (SSTORE refund)
 
+**Total TRX burn ≠ energy only.** The `feeLimit` parameter only caps the energy burn. Bandwidth is charged separately: `bandwidth_bytes × getTransactionFee` (typically ~0.3–0.4 TRX for a TRC-20 transfer). For accurate cost calculations, add both energy and bandwidth burns. See `tron-developer-tronweb` for the `estimateTotalBurnTRX` helper and `tron-architect` for the full cost breakdown.
+
 ## TRC-20 Transfer
 
 Full flow: estimate energy -> calculate fee_limit -> build with `txLocal: true` -> sign -> broadcast.
