@@ -51,9 +51,9 @@ Integration requires only changing the RPC endpoint URL and adding an API key he
 
 **Variants:**
 - **Standard withdrawals** — single transactions, fees deducted on broadcast
-- **Batch withdrawals** — process multiple recipient transfers sequentially
-- **Delayed transactions** — extend expiration, let Transatron batch and process them for further savings (ideal for high-volume, non-time-sensitive operations)
-- **Deposit consolidation** — sweep from merchant wallets to hot wallet through Transatron
+- **Batch withdrawals** — process multiple recipient transfers sequentially with a short delay between each (e.g., 2s)
+- **Delayed transactions** — extend expiration, let Transatron batch and process them for further savings (ideal for high-volume, non-time-sensitive operations like bulk payouts from a CSV)
+- **Merchant deposit flow** — generate a temporary wallet per customer, receive their deposit, then sweep to the hot wallet. Both the inbound deposit and the sweep use the same spender API key, so Transatron covers energy for the zero-TRX temp wallet
 
 **Key risk:** Balance depletion. When balance reaches 0, bypass mode kicks in — TRX burns from the sender wallet (if bypass is enabled) or transactions fail. **Always implement a replenisher** that monitors balance and auto-deposits TRX or USDT.
 
@@ -73,7 +73,7 @@ Integration requires only changing the RPC endpoint URL and adding an API key he
 **Business model options:**
 - **Fee pass-through** — user pays exact Transatron cost
 - **Markup** — charge users more than Transatron's rate, keep the margin
-- **Cashback** — set a custom energy price on your non-spender API key; the spread between user payment and Transatron rate is credited as cashback
+- **Cashback** — set a custom energy price on your non-spender API key via the Transatron dashboard; the spread between the price charged to users and Transatron's actual rate is automatically credited as cashback to your TFN balance. Measure cashback by checking TFN/TFU balance delta before/after the transaction, or query `/api/v1/orders` for the exact `cashback_amount_trx` per order
 
 **Key considerations:**
 - Uses non-spender API key (safe for client-side)
@@ -87,14 +87,19 @@ Integration requires only changing the RPC endpoint URL and adding an API key he
 **Recommended payment mode:** Coupon payment
 
 **How it works:**
-- Server creates a coupon (using spender key) with a TRX/USDT limit, target address, and expiry
+- Server creates a coupon (using spender key) with limits, target address, and expiry
 - Coupon code is sent to the user's wallet
 - User signs their transaction and attaches the coupon ID
 - Transaction is broadcast with a non-spender key — Transatron deducts from the coupon
 - Unused coupon balance is auto-refunded to the company
 
+**Coupon denomination:** Two independent limit types — use one or both:
+- `rtrx_limit` — TRX-denominated cap (amount in SUN). Covers energy costs paid in TRX.
+- `usdt_transactions` — number of USDT-paid transactions allowed. Each transaction's USDT fee is deducted from the account's TFU balance.
+
 **Ideal for:**
 - Onboarding promotions ("first N transactions free")
+- **Card/bonus point integration** — company creates coupon, charges user via card or loyalty points off-chain, user redeems coupon on-chain. Decouples blockchain fee payment from the user-facing payment method.
 - Subscription models where platform covers fees
 - B2B scenarios where one entity sponsors another's transactions
 - Reselling energy as a service (buy from Transatron, sell to users at markup)
@@ -124,7 +129,8 @@ Integration requires only changing the RPC endpoint URL and adding an API key he
 
 **Key considerations:**
 - Transactions aren't confirmed immediately — users must be informed of the delay
-- Can force immediate processing if needed
+- While in queue, `getTransaction()` returns `contractRet: 'PENDING'` or `'PROCESSING'`. Once processed and on-chain, standard TRON status is returned (`SUCCESS`/`FAILED`). Build monitoring around this state machine.
+- `POST /api/v1/pendingtxs/flush` forces immediate processing of all queued transactions — useful for end-of-batch or time-sensitive overrides
 - Requires spender API key
 
 ## Decision Matrix
@@ -137,6 +143,10 @@ Integration requires only changing the RPC endpoint URL and adding an API key he
 | DApp with fee sponsorship | Non-custody | Coupon | Both | Normal | Medium |
 | Promotional free transactions | Non-custody | Coupon | Both | Normal | Funded by company |
 | Payment gateway | Custody | Account | Spender | Normal | Lowest |
+| Card/bonus fee abstraction | Non-custody | Coupon | Both | Normal | Funded by company |
+| Bulk payouts (CSV/queue) | Custody | Account + Delayed | Spender | High (batched) | Lowest |
+| Merchant deposit sweeps | Custody | Account | Spender | Normal | Lowest |
+| Cashback wallet | Non-custody | Instant | Both | Normal (+1 tx) | Revenue-generating |
 | Energy reseller | Non-custody | Coupon or Instant | Both | Normal | Margin-based |
 
 ## API Key Strategy
@@ -198,9 +208,10 @@ For USDT0 cross-chain transfer implementation, delegate to the `tron-integrator-
 When advising on integration, guide the user to:
 
 1. **Choose an integration pattern** from the decision matrix above
-2. **Set up a Transatron account** (dashboard for testing, API for automation)
-3. **Hand off to the `transatron-integrator` agent** for implementation code and API details
-4. **Hand off to the `tron-developer-tronweb` agent** for TronWeb-specific coding patterns
-5. **Hand off to the `tron-integrator-trc20` agent** for TRC-20 token operations, energy estimation, and USDT dynamic penalty handling
-6. **Hand off to the `tron-architect` agent** for TRON platform architecture — resource model, transaction types, energy economics, and smart contract lifecycle planning
-7. **Hand off to the `tron-integrator-usdt0` agent** for USDT0 (LayerZero OFT) cross-chain transfer implementation, including call_value handling
+2. **Review reference examples** at [`transatron/examples_tronweb`](https://github.com/transatron/examples_tronweb) — runnable TronWeb 6.x implementations for all payment modes and business use cases (hot wallet withdrawals, merchant deposits, bulk payouts, cashback, coupon flows)
+3. **Set up a Transatron account** (dashboard for testing, API for automation)
+4. **Hand off to the `transatron-integrator` agent** for implementation code and API details
+5. **Hand off to the `tron-developer-tronweb` agent** for TronWeb-specific coding patterns
+6. **Hand off to the `tron-integrator-trc20` agent** for TRC-20 token operations, energy estimation, and USDT dynamic penalty handling
+7. **Hand off to the `tron-architect` agent** for TRON platform architecture — resource model, transaction types, energy economics, and smart contract lifecycle planning
+8. **Hand off to the `tron-integrator-usdt0` agent** for USDT0 (LayerZero OFT) cross-chain transfer implementation, including call_value handling
