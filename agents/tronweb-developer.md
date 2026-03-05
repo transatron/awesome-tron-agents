@@ -14,10 +14,12 @@ Key reference: https://tronweb.network/docu/docs/intro/
 Standard setup with API key authentication:
 
 ```typescript
-import TronWeb from 'tronweb';
+import { TronWeb, providers } from 'tronweb';
 
 const tronWeb = new TronWeb({
-  fullHost: 'https://api.trongrid.io',
+  fullHost: new providers.HttpProvider('https://api.trongrid.io', 30_000),
+  solidityNode: new providers.HttpProvider('https://api.trongrid.io', 30_000),
+  disablePlugins: true,
   headers: {
     'TRON-PRO-API-KEY': process.env.TRON_API_KEY,
     // or 'TRANSATRON-API-KEY' when using Transatron as fullHost
@@ -26,7 +28,11 @@ const tronWeb = new TronWeb({
 });
 ```
 
-When using Transatron as the `fullHost`, both `TRANSATRON-API-KEY` and `TRON-PRO-API-KEY` headers are accepted.
+**Production notes:**
+- Use `providers.HttpProvider` with an explicit timeout (ms) to avoid hanging requests
+- Set `solidityNode` to the same URL for confirmed-block queries (defaults to `fullHost` otherwise)
+- Set `disablePlugins: true` to skip loading unnecessary TronWeb plugins in server environments
+- When using Transatron as the `fullHost`, both `TRANSATRON-API-KEY` and `TRON-PRO-API-KEY` headers are accepted
 
 ## TRX Transfer Flow
 
@@ -243,14 +249,67 @@ tronWeb.transactionBuilder._getTriggerSmartContractArgs(...args, '100000000');
 
 ## Common Patterns
 
+### Extending TronWeb with Custom Methods
+
+Use `Object.assign()` to add custom methods to a TronWeb instance without subclassing:
+
+```typescript
+const tronWeb = new TronWeb({ /* ... */ });
+
+const extendedTronWeb = Object.assign(tronWeb, {
+  async customTransfer(to: string, amount: number) { /* ... */ },
+  async getFeeEstimate(method: string, data: any) { /* ... */ },
+});
+```
+
+This pattern is used in production to add shielded transaction methods, fee calculators, and other domain-specific operations to TronWeb.
+
+### Local Transaction Building with `_triggerSmartContractLocal`
+
+For building transactions locally without a network round-trip, use `_triggerSmartContractLocal` instead of `triggerSmartContract`:
+
+```typescript
+const args = tronWeb.transactionBuilder._getTriggerSmartContractArgs(
+  contractAddress,
+  functionSelector,
+  options,
+  parameters,
+  issuerAddress,
+  tokenId,
+  '0',        // 7th param MUST be string, not number
+  feeLimit,
+);
+const tx = await tronWeb.transactionBuilder._triggerSmartContractLocal(...args);
+```
+
+### Bandwidth Calculation
+
+Calculate bandwidth cost from the serialized transaction:
+
+```typescript
+function calculateBandwidth(rawDataHex: string): number {
+  return rawDataHex.length / 2 + 65 + 64 + 5; // data + signature + overhead
+}
+```
+
 ### Waiting for Transaction Confirmation
 
 ```typescript
-async function waitForConfirmation(txId: string, maxRetries = 10): Promise<any> {
+async function waitForConfirmation(
+  txId: string,
+  tronWeb: TronWeb,
+  maxRetries = 50,
+  intervalMs = 1500
+): Promise<any> {
   for (let i = 0; i < maxRetries; i++) {
-    await new Promise(r => setTimeout(r, 3000));
+    await new Promise(r => setTimeout(r, intervalMs));
     const info = await tronWeb.trx.getTransactionInfo(txId);
-    if (info && info.id) return info;
+    if (info?.id) {
+      if (info.receipt?.result === 'FAILED' || info.receipt?.result === 'REVERT') {
+        throw new Error(`Transaction ${txId} failed: ${info.receipt.result}`);
+      }
+      return info;
+    }
   }
   throw new Error(`Transaction ${txId} not confirmed after ${maxRetries} retries`);
 }
@@ -317,6 +376,24 @@ As an alternative source of truth, use the Tron MCP server (if available in the 
 - **Inspecting account state** — check balances, resources (energy/bandwidth), and token holdings through MCP to validate that your TronWeb code is reading the chain correctly.
 
 When Tron MCP tools are available, prefer them for read-only verification. Continue using TronWeb for building, signing, and broadcasting transactions.
+
+### Shielded TRC20
+
+For shielded TRC20 operations (mint, transfer, burn), use the `tron-shielded-usdt-integrator` agent — it covers key generation, zk-SNARK proof building, note scanning, and the full transaction signing pattern.
+
+### Energy Estimation Fallback
+
+When `triggerConstantContract` REVERTs (e.g., transferring from an address with 0 balance), use a fallback:
+
+```typescript
+let energyEstimate: number;
+try {
+  const { energy_used } = await tronWeb.transactionBuilder.triggerConstantContract(/* ... */);
+  energyEstimate = energy_used || 132_000;
+} catch {
+  energyEstimate = 132_000;
+}
+```
 
 When helping developers, always:
 1. Use the estimate → simulate → build → sign → broadcast pattern for TRC20

@@ -11,6 +11,7 @@
   "agents": [
     "./tronweb-developer.md",
     "./transatron-integrator.md",
-    "./transatron-architect.md"
+    "./transatron-architect.md",
+    "./tron-shielded-usdt-integrator.md"
   ]
 }

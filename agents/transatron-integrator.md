@@ -14,15 +14,50 @@ Key reference: https://docs.transatron.io (append `.md` to sitemap URLs for raw 
 Transatron acts as a transparent proxy to TRON, adding `transatron` extension objects to API responses. Replace the standard `fullHost` and add an API key header:
 
 ```typescript
-import TronWeb from 'tronweb';
+import { TronWeb, providers } from 'tronweb';
 
 const tronWeb = new TronWeb({
-  fullHost: 'https://api.transatron.io',
+  fullHost: new providers.HttpProvider('https://api.transatron.io', 30_000),
+  solidityNode: new providers.HttpProvider('https://api.transatron.io', 30_000),
+  disablePlugins: true,
   headers: {
     'TRANSATRON-API-KEY': process.env.TRANSATRON_API_KEY,
     // 'TRON-PRO-API-KEY' also accepted
   },
 });
+```
+
+**Production notes:**
+- Use `HttpProvider` with an explicit timeout (ms) to avoid hanging requests
+- Set `solidityNode` to the same Transatron URL for confirmed-block queries
+- Set `disablePlugins: true` to avoid loading unnecessary TronWeb plugins
+
+### Dual-Instance Pattern (Server-Side)
+
+For server-side apps that need both spender and non-spender capabilities, create two TronWeb instances and route broadcasts based on whether energy subsidy should apply:
+
+```typescript
+const payerTronWeb = new TronWeb({
+  fullHost: new providers.HttpProvider(TRANSATRON_URL, 30_000),
+  solidityNode: new providers.HttpProvider(TRANSATRON_URL, 30_000),
+  disablePlugins: true,
+  headers: { 'TRANSATRON-API-KEY': SPENDER_KEY },
+});
+
+const userTronWeb = new TronWeb({
+  fullHost: new providers.HttpProvider(TRANSATRON_URL, 30_000),
+  solidityNode: new providers.HttpProvider(TRANSATRON_URL, 30_000),
+  disablePlugins: true,
+  headers: { 'TRANSATRON-API-KEY': NON_SPENDER_KEY },
+});
+
+// Route broadcast based on energy subsidy flag
+async function broadcast(tx: any, isEnergyApplied: boolean) {
+  const client = isEnergyApplied ? payerTronWeb : userTronWeb;
+  const result = await client.trx.sendRawTransaction(tx);
+  if (!result?.result) throw result;
+  return result;
+}
 ```
 
 ## API Key Types
@@ -144,29 +179,57 @@ Server creates a coupon (spender key), client attaches it to signed transaction 
 ```typescript
 // --- Server side (spender key) ---
 
-// Create coupon
-const coupon = await fetch('https://api.transatron.io/api/v1/coupons', {
-  method: 'POST',
-  headers: {
-    'TRANSATRON-API-KEY': spenderKey,
-    'Content-Type': 'application/json',
-  },
-  body: JSON.stringify({
+// Create coupon via TronWeb's fullNode.request() — avoids separate fetch()
+const coupon = await payerTronWeb.fullNode.request(
+  'api/v1/coupon',
+  {
     address: userAddress,         // restrict to this address
-    trx_limit: 100_000_000,      // max TRX in SUN
-    expiration: '2025-12-31',    // expiry date
-  }),
-}).then(r => r.json());
+    rtrx_limit: 100_000_000,     // max TFN in SUN
+    usdt_transactions: 5,        // max number of USDT-paid transactions
+    valid_to: Date.now() + 1000 * 60 * 60 * 24, // expiry timestamp (ms)
+  },
+  'post'
+);
+// coupon.coupon_id — the coupon identifier
 
 // --- Client side (non-spender key) ---
 
 // User builds and signs main tx, then attaches coupon
 const signedTx = await tronWeb.trx.sign(transaction);
-signedTx.coupon = coupon.id; // attach coupon ID
+signedTx.coupon = coupon.coupon_id; // attach coupon ID
 
 // Broadcast with coupon
 const result = await tronWeb.trx.sendRawTransaction(signedTx);
 ```
+
+#### Coupon Lifecycle Management
+
+After a coupon is issued, track whether it was used and refund expired ones:
+
+```typescript
+// Check coupon status
+const status = await payerTronWeb.fullNode.request(
+  `api/v1/coupon/${couponId}`,
+  {},
+  'get'
+);
+// status.is_used, status.valid_to, status.rtrx_limit, etc.
+
+// Refund unused/expired coupon
+if (!status.is_used && status.valid_to < Date.now()) {
+  await payerTronWeb.fullNode.request(
+    `api/v1/coupon/${couponId}`,
+    {},
+    'delete'
+  );
+  // Balance is returned to account
+}
+```
+
+**Coupon field reference:**
+- `rtrx_limit` — max TFN (TRX-equivalent) the coupon covers
+- `usdt_transactions` — max number of USDT-paid transactions allowed
+- `valid_to` — expiry timestamp in milliseconds
 
 ### 4. Delayed Transactions
 
@@ -226,18 +289,23 @@ function hexToUnicode(hex: string): string {
 
 ### Broadcast Polling
 
-After broadcasting, wait 5-10 seconds before the first status check, then poll every 3 seconds:
+After broadcasting, poll for the transaction receipt. Production pattern uses 1.5s intervals with up to 50 retries and checks `receipt.result` for definitive status:
 
 ```typescript
 async function waitForTransatronResult(txId: string, tronWeb: TronWeb) {
-  await new Promise(r => setTimeout(r, 7000)); // initial wait
-
-  for (let i = 0; i < 10; i++) {
+  for (let i = 0; i < 50; i++) {
+    await new Promise(r => setTimeout(r, 1500));
     const info = await tronWeb.trx.getTransactionInfo(txId);
-    if (info && info.id) return info;
-    await new Promise(r => setTimeout(r, 3000));
+    if (info?.id) {
+      // Check receipt for definitive outcome
+      if (info.receipt?.result === 'SUCCESS') return info;
+      if (info.receipt?.result === 'FAILED' || info.receipt?.result === 'REVERT') {
+        throw new Error(`Transaction ${txId} failed: ${info.receipt.result}`);
+      }
+      return info; // receipt exists but no explicit result field
+    }
   }
-  throw new Error(`Transaction ${txId} not confirmed`);
+  throw new Error(`Transaction ${txId} not confirmed after 50 retries`);
 }
 ```
 
@@ -248,13 +316,29 @@ When multiple payment sources are available, Transatron uses this priority:
 2. Internal account balance (TFN/TFU)
 3. TRX burning (if bypass is enabled)
 
+### Bandwidth Calculation
+
+Calculate bandwidth from the serialized transaction. This is needed for accurate fee quotes:
+
+```typescript
+function calculateBandwidth(rawDataHex: string): number {
+  return rawDataHex.length / 2 + 65 + 64 + 5; // bytes + signature + overhead
+}
+
+// Usage: after building a transaction
+const bandwidth = calculateBandwidth(transaction.raw_data_hex);
+const bandwidthFee = bandwidth * bandwidthPrice; // from getChainParameters()
+```
+
 ### Energy Fallback
 
-When energy estimation fails or returns 0, use 132,000 energy as a safe fallback for max USDT transfer cost:
+When energy estimation fails or returns 0, use 132,000 energy as a safe fallback for standard TRC20 transfers:
 
 ```typescript
 const energyEstimate = energy_used || 132_000;
 ```
+
+For shielded TRC20 post-burn energy estimation (250k fallback), see the `tron-shielded-usdt-integrator` agent.
 
 ### Cashback Pricing
 
@@ -281,10 +365,12 @@ When working with Transatron-extended responses, define these types:
 
 ```typescript
 interface TransatronFeeQuote {
-  fee_trx: number;        // fee in SUN for TRX payment
-  fee_usdt: number;       // fee in micro-USDT
-  energy_needed: number;  // energy units required
-  message: string;        // hex-encoded message
+  fee_trx: number;              // fee in SUN for TRX payment
+  fee_usdt: number;             // fee in micro-USDT
+  energy_needed: number;        // energy units required
+  message: string;              // hex-encoded message
+  tx_fee_rtrx_account: number;  // account-mode fee in TFN (SUN)
+  tx_fee_rusdt_account: number; // account-mode fee in TFU (micro-USDT)
 }
 
 interface TransatronBroadcastResult {

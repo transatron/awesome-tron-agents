@@ -100,9 +100,10 @@ Integration requires only changing the RPC endpoint URL and adding an API key he
 - Reselling energy as a service (buy from Transatron, sell to users at markup)
 
 **Key considerations:**
-- Coupons are time-limited
+- Coupons are time-limited (`valid_to` timestamp) — plan for expiry handling
 - Requires server-side component (spender key) + client-side component (non-spender key)
 - Unused balance auto-refunds — low financial risk for the sponsor
+- **Coupon lifecycle management** is critical: track issuance, check usage status, and delete expired coupons to reclaim balance. Build this into your backend operations pipeline
 
 ### Pattern 4: Delayed Transactions (Batch Processing)
 
@@ -174,7 +175,10 @@ Yes. You can maintain multiple TronWeb instances with different endpoints and ro
 Standard and instant payment transactions have the same on-chain confirmation time as regular TRON transactions. Delayed transactions are intentionally deferred for batching.
 
 **"Does it work with all TRC20 tokens?"**
-Yes. Energy coverage works for any smart contract interaction. For instant payments, only TRX and USDT are accepted as fee payment currencies.
+Yes. Energy coverage works for any smart contract interaction, including shielded TRC20 operations. For instant payments, only TRX and USDT are accepted as fee payment currencies.
+
+**"Does it work with shielded (privacy) transactions?"**
+Yes. See the `tron-shielded-usdt-integrator` agent for implementation details on shielded mint, transfer, and burn operations with Transatron fee coverage.
 
 ## When NOT to Use Transatron
 
