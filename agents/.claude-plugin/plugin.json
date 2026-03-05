@@ -10,6 +10,7 @@
   "license": "MIT",
   "agents": [
     "./tronweb-developer.md",
-    "./transatron-integrator.md"
+    "./transatron-integrator.md",
+    "./transatron-architect.md"
   ]
 }
