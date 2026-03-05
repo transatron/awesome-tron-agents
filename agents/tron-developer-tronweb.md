@@ -82,6 +82,20 @@ const result = await tronWeb.trx.sendRawTransaction(signed);
 
 For TRC-20 specific operations (transfer, approve, transferFrom, balance queries, energy fallbacks), use the `tron-integrator-trc20` agent — it has verified energy tables, USDT dynamic penalty handling, and operation-specific fallback values.
 
+## Token Amount Rounding Rule
+
+When converting human-readable amounts to on-chain integers (SUN, or token smallest units via `10^decimals`), always use `Math.floor`. Never `Math.round` or `Math.ceil` — rounding up can produce an amount exceeding the actual balance, causing a revert.
+
+```typescript
+// TRX: 1 TRX = 1_000_000 SUN
+const amountSun = Math.floor(trxAmount * 1_000_000);
+
+// TRC-20: decimals varies per token (USDT = 6, most tokens = 18)
+const amountSmallest = Math.floor(humanAmount * 10 ** decimals);
+```
+
+This applies after any business logic (exchange rates, splits, fee deductions). Do arithmetic in human-readable values, then `Math.floor` once at the final conversion. The inverse — `Math.ceil` — is correct only for `feeLimit` where underestimating causes failure.
+
 ## TRX Balance
 
 ```typescript

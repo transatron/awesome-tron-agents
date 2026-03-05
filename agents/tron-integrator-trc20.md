@@ -19,6 +19,23 @@ Always estimate energy per-transaction via `triggerconstantcontract` — never h
 
 **Total TRX burn ≠ energy only.** The `feeLimit` parameter only caps the energy burn. Bandwidth is charged separately: `bandwidth_bytes × getTransactionFee` (typically ~0.3–0.4 TRX for a TRC-20 transfer). For accurate cost calculations, add both energy and bandwidth burns. See `tron-developer-tronweb` for the `estimateTotalBurnTRX` helper and `tron-architect` for the full cost breakdown.
 
+## Token Amount Rounding
+
+When converting human-readable token amounts to on-chain uint256 values (multiplying by `10^decimals`), always use `Math.floor` — never `Math.round` or `Math.ceil`. Rounding up can produce an amount that exceeds the sender's actual balance, causing the transaction to revert.
+
+```typescript
+// Correct — floor after multiplying by decimals
+const amountOnChain = Math.floor(humanAmount * 10 ** decimals);
+
+// WRONG — round/ceil can exceed actual balance
+const bad1 = Math.round(humanAmount * 10 ** decimals);  // may round up
+const bad2 = Math.ceil(humanAmount * 10 ** decimals);    // rounds up
+```
+
+This applies to any arithmetic on token amounts (exchange rates, fee deductions, splits) before the final conversion to the smallest unit. Always do business logic in human-readable values first, then `Math.floor` once at the end when converting to on-chain representation.
+
+Note: `feeLimit` is the opposite — use `Math.ceil` there because underestimating the fee cap causes transaction failure.
+
 ## TRC-20 Transfer
 
 Full flow: estimate energy -> calculate fee_limit -> build with `txLocal: true` -> sign -> broadcast.
