@@ -78,7 +78,7 @@ Integration requires only changing the RPC endpoint URL and adding an API key he
 **Key considerations:**
 - Uses non-spender API key (safe for client-side)
 - TRX fee payment is cheaper than USDT
-- Two transactions required per operation (fee + main) — slightly higher latency
+- Two transactions required per operation (fee + main) — they must be broadcast back-to-back with no verification in between, because Transatron processes them as a batch
 
 ### Pattern 3: Non-Custody with Coupons (Platforms, Loyalty Programs)
 

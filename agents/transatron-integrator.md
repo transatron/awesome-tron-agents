@@ -162,13 +162,15 @@ const feeTx = await tronWeb.transactionBuilder.sendTrx(
 );
 const signedFeeTx = await tronWeb.trx.sign(feeTx);
 
-// 4. Broadcast fee tx FIRST
+// 4. Broadcast fee tx, then main tx — back-to-back, NO verification in between
 await tronWeb.trx.sendRawTransaction(signedFeeTx);
 
-// 5. Then broadcast main tx
+// 5. Broadcast main tx immediately after fee tx
 const signedMainTx = await tronWeb.trx.sign(mainTx);
 const result = await tronWeb.trx.sendRawTransaction(signedMainTx);
 ```
+
+**Critical: Do NOT check the fee deposit result before broadcasting the main transaction.** Transatron processes instant payment deposits and main transactions as a batch — both must arrive back-to-back. Inserting any verification, polling, or `await getTransactionInfo()` between the two broadcasts breaks the batch and causes Transatron to process them independently, which means the main transaction loses its energy sponsorship. Send both `sendRawTransaction` calls sequentially with no checks in between. Verify the final result only after the main transaction broadcast returns.
 
 7% pricing tolerance between estimate and broadcast. If the fee drifts beyond 7%, Transatron returns an `INSTANT_PAYMENT_UNDERPRICED` error and does not broadcast — resubmit `triggerSmartContract` with `txLocal: true` for an updated quote. TRX fee payment is cheaper than USDT.
 
