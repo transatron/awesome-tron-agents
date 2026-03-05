@@ -356,11 +356,22 @@ const bandwidthFee = bandwidth * bandwidthPrice; // from getChainParameters()
 
 ### Energy Fallback
 
-When energy estimation fails or returns 0, use 132,000 energy as a safe fallback for standard TRC20 transfers:
+When energy estimation fails or returns 0, use operation-specific fallbacks for USDT (all include 4.4x dynamic penalty):
 
 ```typescript
-const energyEstimate = energy_used || 132_000;
+// USDT transfer / transferFrom with max-approval fallback:
+// 131,000 covers worst case first-time recipient (~130,285 actual)
+const transferEnergyEstimate = energy_used || 131_000;
+
+// USDT transferFrom with finite approval (allowance decrement):
+// 156,000 covers worst case first-time + allowance write (~155,325 actual)
+const transferFromEnergyEstimate = energy_used || 156_000;
+
+// USDT approve (set/update) fallback: 100,000 covers ~99,764 actual
+const approveEnergyEstimate = energy_used || 100_000;
 ```
+
+For non-USDT TRC-20 tokens without dynamic energy penalty, base energy is much lower. See `tron-integrator-trc20` for the full energy reference tables and operation-specific fallback values. Always prefer `triggerconstantcontract` estimation over fallback values.
 
 For shielded TRC20 post-burn energy estimation (250k fallback), see the `tron-integrator-shieldedusdt` agent.
 
@@ -629,7 +640,7 @@ When writing Transatron integration code:
 4. Use the correct deposit address: `payment_address` from `/api/v1/config` for account deposits, `deposit_address` from `getNodeInfo()` for instant payments
 5. Handle the 7% instant payment pricing tolerance — re-estimate if price drifts
 6. Implement broadcast polling (5-10s initial wait, 3s retries)
-7. Fall back to 132,000 energy when estimation fails or returns 0
+7. Fall back to 131,000 energy for USDT transfers when estimation fails or returns 0
 8. Never expose spender keys in client-side code
 9. Implement balance replenishment for account payment mode — check thresholds and auto-deposit
 10. For programmatic onboarding, use `POST /api/v1/register` with a signed (unbroadcasted) deposit tx

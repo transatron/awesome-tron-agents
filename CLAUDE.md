@@ -12,15 +12,17 @@ Each `.md` file in `agents/` is an agent. `agents/.claude-plugin/plugin.json` li
 
 The `description` field is critical — Claude Code uses it as the routing hint to decide which agent to spawn. Write it as a "Use when..." trigger phrase. Bad descriptions mean the agent never gets invoked.
 
-`tools` controls what the agent can actually do. Architect agents (`tron-architect`, `transatron-architect`) deliberately lack Write/Edit/Bash because they advise on architecture but must not write code — they hand off to implementation agents instead.
+`tools` controls what the agent can actually do. Architect agents (`tron-architect`, `transatron-architect`) deliberately lack Write/Edit/Bash because they advise on architecture but must not write code — they hand off to implementation agents instead. Integrator agents (`tron-integrator-trc20`, `tron-integrator-usdt0`, `tron-integrator-shieldedusdt`, `transatron-integrator`) have full tool access for writing production code.
 
 `model: inherit` means the agent uses whatever model the caller is running. We use this everywhere so the user controls model selection.
 
 ## Agent Design Conventions
 
 - Architect agents advise and delegate. Implementation agents write code. This split exists because mixing advice and code in one agent produces worse output for both.
+- `tron-developer-tronweb` is the general TronWeb SDK agent — it covers init, signing, broadcasting, wallets. TRC-20 specific operations (transfer, approve, transferFrom, energy estimation, USDT handling) live in `tron-integrator-trc20` to keep concerns separated.
 - Each agent lists which other agents to delegate to. Keep these cross-references consistent — if agent A mentions agent B, check that B's description covers what A promises.
 - Code examples in agents should be production TypeScript derived from `local/` reference implementations, not invented. When the reference changes, update the agent.
+- Energy reference numbers in `tron-integrator-trc20` were verified from TRON mainnet (March 2026) via Tron MCP individual tx hashes + Trino analytics (~350k txs). When updating these, re-verify against current mainnet data.
 - Transatron docs at https://docs.transatron.io support appending `.md` to sitemap URLs for raw markdown — agents use this for WebFetch.
 
 ## Validating Changes

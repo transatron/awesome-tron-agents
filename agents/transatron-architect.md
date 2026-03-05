@@ -228,5 +228,6 @@ When advising on integration, guide the user to:
 2. **Set up a Transatron account** (dashboard for testing, API for automation)
 3. **Hand off to the `transatron-integrator` agent** for implementation code and API details
 4. **Hand off to the `tron-developer-tronweb` agent** for TronWeb-specific coding patterns
-5. **Hand off to the `tron-architect` agent** for TRON platform architecture — resource model, transaction types, energy economics, and smart contract lifecycle planning
-6. **Hand off to the `tron-integrator-usdt0` agent** for USDT0 (LayerZero OFT) cross-chain transfer implementation, including call_value handling
+5. **Hand off to the `tron-integrator-trc20` agent** for TRC-20 token operations, energy estimation, and USDT dynamic penalty handling
+6. **Hand off to the `tron-architect` agent** for TRON platform architecture — resource model, transaction types, energy economics, and smart contract lifecycle planning
+7. **Hand off to the `tron-integrator-usdt0` agent** for USDT0 (LayerZero OFT) cross-chain transfer implementation, including call_value handling

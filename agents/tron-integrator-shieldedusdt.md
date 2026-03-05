@@ -293,7 +293,7 @@ async function prepareShieldedTransfer(
 
 ```typescript
 // 6. Build on-chain transaction with dynamic feeLimit
-const energyUsed = check.energy_used || 132_000;
+const energyUsed = check.energy_used || 131_000;
 const chainParams = await tronWeb.trx.getChainParameters();
 const energyFee = chainParams.find(p => p.key === 'getEnergyFee')?.value ?? 420;
 const feeLimit = Math.ceil(energyUsed * energyFee * 1.2);
@@ -492,7 +492,7 @@ try {
   const { energy_used } = await tronWeb.transactionBuilder.triggerConstantContract(
     /* ... */
   );
-  energyEstimate = energy_used || 132_000;
+  energyEstimate = energy_used || 131_000;
 } catch {
   // Simulation REVERT — use higher fallback for post-burn scenario
   energyEstimate = 250_000;

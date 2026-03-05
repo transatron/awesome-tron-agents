@@ -28,6 +28,7 @@ GITHUB_RAW_BASE="https://raw.githubusercontent.com/transatron/awesome-tron-agent
 AGENT_FILES=(
   "tron-architect.md"
   "tron-developer-tronweb.md"
+  "tron-integrator-trc20.md"
   "tron-integrator-shieldedusdt.md"
   "tron-integrator-usdt0.md"
   "transatron-architect.md"
@@ -36,6 +37,7 @@ AGENT_FILES=(
 AGENT_NAMES=(
   "tron-architect"
   "tron-developer-tronweb"
+  "tron-integrator-trc20"
   "tron-integrator-shieldedusdt"
   "tron-integrator-usdt0"
   "transatron-architect"
@@ -43,7 +45,8 @@ AGENT_NAMES=(
 )
 AGENT_DESCS=(
   "TRON architecture — resource model, fee optimization, smart contract strategy"
-  "TronWeb SDK — DApps, transactions, wallets, TRC-20 tokens"
+  "TronWeb SDK — DApps, transactions, wallets, general patterns"
+  "TRC-20 tokens — transfer, approve, transferFrom, energy estimation, USDT handling"
   "Shielded TRC-20 — zk-SNARK privacy, mint/transfer/burn"
   "USDT0 (LayerZero OFT) — cross-chain bridging to ETH/SOL/TON"
   "Transatron architecture — integration patterns, payment modes, trade-offs"
