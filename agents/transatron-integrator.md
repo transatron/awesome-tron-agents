@@ -47,19 +47,28 @@ Query via `GET /api/v1/config`.
 When `txLocal: true` is passed to `triggerSmartContract`, Transatron returns a fee quote in the `transatron` extension without broadcasting. This is how you get pricing before committing. Runnable example: [`estimate-fee.ts`](https://github.com/transatron/examples_tronweb/blob/main/src/examples/sending_tx/estimate-fee.ts)
 
 ```typescript
+// 1. Estimate energy first
+const { energy_used } = await tronWeb.transactionBuilder.triggerConstantContract(
+  contractAddress, 'transfer(address,uint256)', {},
+  [{ type: 'address', value: to }, { type: 'uint256', value: amount }], from
+);
+const chainParams = await tronWeb.trx.getChainParameters();
+const energyFee = chainParams.find(p => p.key === 'getEnergyFee')?.value ?? 100;
+const feeLimit = Math.ceil(energy_used * energyFee * 1.001);
+
+// 2. Get fee quote with calculated feeLimit
 const { transaction } = await tronWeb.transactionBuilder.triggerSmartContract(
   contractAddress,
   'transfer(address,uint256)',
-  { feeLimit: 100_000_000, txLocal: true },
-  [
-    { type: 'address', value: to },
-    { type: 'uint256', value: amount },
-  ],
+  { feeLimit, txLocal: true },
+  [{ type: 'address', value: to }, { type: 'uint256', value: amount }],
   from
 );
 
 // transaction.transatron contains the fee quote
 ```
+
+**Critical:** Never hardcode `feeLimit` (e.g., `100_000_000`). Transatron uses `feeLimit` to determine how much energy to delegate — an oversized value wastes resources, an undersized value causes failure. Always calculate from `energy_used × energyFee`.
 
 ## Fee Payment Modes
 
@@ -85,7 +94,7 @@ const config = await fetch('https://api.transatron.io/api/v1/config', {
 const { transaction } = await tronWeb.transactionBuilder.triggerSmartContract(
   contractAddress,
   'transfer(address,uint256)',
-  { feeLimit: 100_000_000, txLocal: true },
+  { feeLimit, txLocal: true } // feeLimit from energy estimation — never hardcode,
   [{ type: 'address', value: to }, { type: 'uint256', value: amount }],
   from
 );
@@ -115,7 +124,7 @@ const depositAddress = nodeInfo.transatronInfo.deposit_address;
 const { transaction: mainTx } = await tronWeb.transactionBuilder.triggerSmartContract(
   contractAddress,
   'transfer(address,uint256)',
-  { feeLimit: 100_000_000, txLocal: true },
+  { feeLimit, txLocal: true } // feeLimit from energy estimation — never hardcode,
   [{ type: 'address', value: to }, { type: 'uint256', value: amount }],
   from
 );
@@ -214,7 +223,7 @@ import { newTxID } from 'transatron-utils'; // or implement locally
 const { transaction } = await tronWeb.transactionBuilder.triggerSmartContract(
   contractAddress,
   'transfer(address,uint256)',
-  { feeLimit: 100_000_000, txLocal: true },
+  { feeLimit, txLocal: true } // feeLimit from energy estimation — never hardcode,
   [{ type: 'address', value: to }, { type: 'uint256', value: amount }],
   from
 );

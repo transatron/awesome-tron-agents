@@ -94,6 +94,19 @@ For TRC-20 implementation code, energy estimation patterns, and operation-specif
 
 Critical: Always use `triggerconstantcontract` to estimate per-transaction — never hardcode energy values. The `energy_used` response already includes the dynamic penalty.
 
+### Hardcoding Anti-Patterns
+
+When reviewing code, flag these common hardcoding mistakes and advise refactoring:
+
+| Hardcoded Value | Problem | Correct Approach |
+|----------------|---------|-----------------|
+| `getEnergyFee` as `420`, `210`, `100` sun/unit | Changes via governance votes | Query `getEnergyFee` from `getchainparameters` per session |
+| `getTransactionFee` as `1000` sun/byte | Subject to governance changes | Query `getTransactionFee` from `getchainparameters` per session |
+| Energy estimate as `65000`, `131000`, etc. | Varies by recipient, approval state, contract | Use `triggerconstantcontract` per transaction. Hardcoded values are acceptable ONLY as fallbacks when estimation reverts (see `tron-integrator-trc20` fallback map) |
+| `feeLimit` as `100_000_000` (100 TRX) | Over-sized limits waste delegated resources; under-sized limits fail | Calculate: `energy_used × getEnergyFee × 1.001` |
+
+All chain parameters change over time through SR governance proposals. Code that hardcodes them will silently produce wrong fee calculations, overpay, or fail after a parameter update. Query once per session and cache briefly — never embed as constants.
+
 ### Staking vs Burning
 
 **Staking** is capital-efficient at sufficient, predictable volume. You lock TRX once and receive a daily energy allocation that regenerates. The break-even point depends on the `getEnergyFee` rate and your daily energy consumption.

@@ -150,7 +150,13 @@ async function prepareShieldedMint(
 **Building and signing the mint transaction:**
 
 ```typescript
-// 5. Build on-chain transaction
+// 5. Calculate feeLimit from simulation
+const energyUsed = check.energy_used || 131_000;
+const chainParams = await tronWeb.trx.getChainParameters();
+const energyFee = chainParams.find(p => p.key === 'getEnergyFee')?.value ?? 100;
+const feeLimit = Math.ceil(energyUsed * energyFee * 1.001);
+
+// 6. Build on-chain transaction
 const { transaction } = await tronWeb.fullNode.request<any>(
   'wallet/triggersmartcontract',
   {
@@ -158,7 +164,7 @@ const { transaction } = await tronWeb.fullNode.request<any>(
     contract_address: shieldedContractHex,
     function_selector: 'mint(uint256,bytes32[9],bytes32[2],bytes32[21])',
     parameter: param.trigger_contract_input,
-    fee_limit: 120_000_000, // 120 TRX — hardcoded for mint
+    fee_limit: feeLimit, // calculated from check.energy_used × energyFee × 1.001
   },
   'POST',
 );

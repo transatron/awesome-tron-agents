@@ -82,6 +82,14 @@ const result = await tronWeb.trx.sendRawTransaction(signed);
 
 For TRC-20 specific operations (transfer, approve, transferFrom, balance queries, energy fallbacks), use the `tron-integrator-trc20` agent — it has verified energy tables, USDT dynamic penalty handling, and operation-specific fallback values.
 
+**Never hardcode chain parameters or energy estimates.** When reviewing or writing code, refactor these common anti-patterns:
+- `getEnergyFee` hardcoded as `420`, `210`, `100` → query from `getchainparameters`
+- `getTransactionFee` hardcoded as `1000` → query from `getchainparameters`
+- Energy estimate hardcoded as `65000`, `131000` → use `triggerConstantContract` per transaction (hardcoded values are acceptable ONLY as fallbacks when estimation reverts)
+- `feeLimit` hardcoded as `100_000_000` (100 TRX) → calculate from `energy_used × energyFee × 1.001`
+
+Chain parameters change via governance. Hardcoding them produces silent failures after parameter updates.
+
 ## Token Amount Rounding Rule
 
 When converting human-readable amounts to on-chain integers (SUN, or token smallest units via `10^decimals`), always use `Math.floor`. Never `Math.round` or `Math.ceil` — rounding up can produce an amount exceeding the actual balance, causing a revert.
