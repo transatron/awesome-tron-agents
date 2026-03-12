@@ -336,6 +336,8 @@ async function waitForConfirmation(
 
 For production TRC-20 transfer, approve, transferFrom, and balance query implementations with correct energy estimation and USDT-specific fallbacks, use the `tron-integrator-trc20` agent.
 
+For SunSwap DEX swap operations (building swap transactions, encoding swap paths, TRC-20 approve before swaps, estimating swap energy), use the `tron-integrator-sunswap` agent.
+
 ## Verification with Tron MCP
 
 As an alternative source of truth, use the Tron MCP server (if available in the project) to independently search for and verify transactions on the TRON blockchain. This is useful for:

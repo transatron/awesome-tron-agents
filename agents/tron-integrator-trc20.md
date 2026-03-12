@@ -99,6 +99,8 @@ async function transferTRC20(
 
 Same pattern as transfer above — change selector to `approve(address,uint256)` and parameters to `[{ type: 'address', value: spender }, { type: 'uint256', value: amount }]`.
 
+Note: TRC-20 approve is also required before SunSwap Token→TRX swaps — the router needs permission to transfer tokens from the sender. For the full swap flow (path encoding, energy estimation, transaction building), delegate to `tron-integrator-sunswap`.
+
 ## TRC-20 Read Queries (balanceOf, allowance)
 
 Read-only calls via `triggerConstantContract` — free, no energy, no transaction:
@@ -152,3 +154,4 @@ For non-USDT TRC-20 tokens without dynamic energy penalty, base energy is much l
 | Transatron implementation code | `transatron-integrator` |
 | Shielded TRC-20 privacy features | `tron-integrator-shieldedusdt` |
 | USDT0 cross-chain transfers (LayerZero OFT) | `tron-integrator-usdt0` |
+| SunSwap DEX swaps (path encoding, energy estimation) | `tron-integrator-sunswap` |

@@ -526,3 +526,5 @@ Complete runnable examples at [`transatron/examples_tronweb`](https://github.com
 | Deposit TRX to account | `accounting/deposit-trx.ts` |
 | Deposit USDT to account | `accounting/deposit-usdt.ts` |
 | Query order history | `accounting/query-orders.ts` |
+| SunSwap swap: TRX→USDT | `sending_tx/swap-trx-to-usdt.ts` |
+| SunSwap swap: USDT→TRX (with approve) | `sending_tx/swap-usdt-to-trx.ts` |

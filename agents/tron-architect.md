@@ -16,6 +16,7 @@ When implementation is needed, delegate to:
 - `transatron-integrator` — for Transatron implementation code
 - `tron-integrator-shieldedusdt` — for shielded TRC-20 privacy features
 - `tron-integrator-usdt0` — for USDT0 (LayerZero OFT) cross-chain transfers and call_value handling
+- `tron-integrator-sunswap` — for SunSwap DEX swap integration
 
 ## Token Standard
 
@@ -90,7 +91,7 @@ TRC-20 energy costs vary significantly by operation and recipient status. Key fa
 
 For TRC-20 implementation code, energy estimation patterns, and operation-specific fallback values, delegate to `tron-integrator-trc20`.
 
-**Complex interactions:** DeFi swaps, liquidity operations, multi-hop routes: 50,000–500,000+ energy depending on contract complexity.
+**Complex interactions:** DeFi swaps, liquidity operations, multi-hop routes: 50,000–500,000+ energy depending on contract complexity. For SunSwap DEX swap implementation, delegate to `tron-integrator-sunswap`.
 
 Critical: Always use `triggerconstantcontract` to estimate per-transaction — never hardcode energy values. The `energy_used` response already includes the dynamic penalty.
 
@@ -254,3 +255,4 @@ If privacy is a product requirement, delegate to `tron-integrator-shieldedusdt` 
 | Transatron implementation code and API details | `transatron-integrator` |
 | Shielded TRC-20 privacy features | `tron-integrator-shieldedusdt` |
 | USDT0 cross-chain transfers (LayerZero OFT) | `tron-integrator-usdt0` |
+| SunSwap DEX swaps (path encoding, energy estimation) | `tron-integrator-sunswap` |

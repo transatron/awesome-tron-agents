@@ -13,6 +13,7 @@ Specialized Claude Code agents for TRON blockchain development — architecture 
 
 - [**tron-developer-tronweb**](agents/tron-developer-tronweb.md) — TronWeb SDK: building/signing/broadcasting transactions, wallet integration (TronLink, WalletConnect, Ledger).
 - [**tron-integrator-trc20**](agents/tron-integrator-trc20.md) — TRC-20 tokens: transfer, approve, transferFrom with energy estimation, USDT dynamic penalty handling, operation-specific fallbacks.
+- [**tron-integrator-sunswap**](agents/tron-integrator-sunswap.md) — SunSwap DEX swaps: Smart Exchange Router integration, swap path encoding, TRC-20 approve before swaps, energy estimation for swaps.
 - [**transatron-integrator**](agents/transatron-integrator.md) — Transatron implementation: fee payment modes (account, instant, coupon, delayed), balance replenishment, programmatic registration.
 - [**tron-integrator-shieldedusdt**](agents/tron-integrator-shieldedusdt.md) — Shielded TRC-20 privacy: zk-SNARK proof generation, mint/transfer/burn flows, note scanning.
 - [**tron-integrator-usdt0**](agents/tron-integrator-usdt0.md) — USDT0 (LayerZero OFT) cross-chain transfers: quoting fees, building send transactions, call_value handling for bridging to Ethereum/Solana/TON.
@@ -65,6 +66,7 @@ Once installed, Claude Code automatically routes TRON-related questions to the a
 /agents tron-architect
 /agents tron-developer-tronweb
 /agents tron-integrator-trc20
+/agents tron-integrator-sunswap
 /agents transatron-architect
 /agents transatron-integrator
 /agents tron-integrator-shieldedusdt

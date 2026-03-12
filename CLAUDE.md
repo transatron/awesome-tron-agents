@@ -12,7 +12,7 @@ Each `.md` file in `agents/` is an agent. `agents/.claude-plugin/plugin.json` li
 
 The `description` field is critical — Claude Code uses it as the routing hint to decide which agent to spawn. Write it as a "Use when..." trigger phrase. Bad descriptions mean the agent never gets invoked.
 
-`tools` controls what the agent can actually do. Architect agents (`tron-architect`, `transatron-architect`) deliberately lack Write/Edit/Bash because they advise on architecture but must not write code — they hand off to implementation agents instead. Integrator agents (`tron-integrator-trc20`, `tron-integrator-usdt0`, `tron-integrator-shieldedusdt`, `transatron-integrator`) have full tool access for writing production code.
+`tools` controls what the agent can actually do. Architect agents (`tron-architect`, `transatron-architect`) deliberately lack Write/Edit/Bash because they advise on architecture but must not write code — they hand off to implementation agents instead. Integrator agents (`tron-integrator-trc20`, `tron-integrator-sunswap`, `tron-integrator-usdt0`, `tron-integrator-shieldedusdt`, `transatron-integrator`) have full tool access for writing production code.
 
 `model: inherit` means the agent uses whatever model the caller is running. We use this everywhere so the user controls model selection.
 
