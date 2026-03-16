@@ -73,6 +73,10 @@ Once installed, Claude Code automatically routes TRON-related questions to the a
 /agents tron-integrator-usdt0
 ```
 
+## Recommended: TRON MCP Server
+
+For the best experience, pair these agents with the [TRON MCP server](https://github.com/transatron/awesome-tron-mcp) — it gives agents direct access to on-chain data (balances, transactions, energy estimation, contract info) without leaving Claude Code.
+
 ## References
 
 - [TronWeb SDK](https://tronweb.network/docu/docs/intro/)
