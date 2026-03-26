@@ -13,7 +13,50 @@ Key references:
 
 ## TronWeb Setup
 
-Use standard TronWeb init (see `tron-developer-tronweb`) but replace `fullHost` and `solidityNode` with `https://api.transatron.io` and add a `TRANSATRON-API-KEY` header (`TRON-PRO-API-KEY` also accepted).
+**Use Transatron as the sole RPC endpoint.** Transatron is a full TRON RPC proxy — it handles balance queries, chain parameters, constant contract calls, transaction building, and broadcasting. There is no need for a separate TronGrid instance. Using a single Transatron TronWeb instance avoids:
+- TronGrid rate limiting (429 errors without a TronGrid API key)
+- Routing confusion between two TronWeb instances
+- Inconsistent block references between endpoints
+
+The only exception is **agentic registration** (`POST /api/v1/register`), which must use a public node because no Transatron API key exists yet. After registration, switch all operations to the Transatron endpoint.
+
+Use `providers.HttpProvider` with explicit headers for reliable header propagation in TronWeb 6.x (the `fullHost` + `headers` shorthand may not propagate headers to all providers):
+
+```typescript
+import { TronWeb, providers } from 'tronweb';
+
+const hp = (url: string) =>
+  new providers.HttpProvider(url, 60_000, '', '', { 'TRANSATRON-API-KEY': apiKey });
+
+const tronWeb = new TronWeb({
+  fullNode: hp('https://api.transatron.io'),
+  solidityNode: hp('https://api.transatron.io'),
+  eventServer: hp('https://api.transatron.io'),
+  privateKey,
+});
+```
+
+## Quick-Start Test Plan (Transatron Trial)
+
+When a user asks to test Transatron with a simple transfer, follow this approach:
+
+**Prerequisites to collect from user:**
+- Wallet private key (for signing transactions)
+- Email address (for registration — becomes dashboard login, never use a placeholder)
+- Recipient address (a distinct wallet — never send to self)
+
+**Step 1: Register (separate script).** Run once. Build and sign a 30 TRX deposit to `TFPzL92nmSxLVVNHoL5cbZ6tjSxfuKUBeD` using a public node — do NOT broadcast. POST the signed tx + real email to `POST /api/v1/register`. Save credentials to `.env`. Print all credentials — they are returned only once.
+
+**Step 2: Send test transfer (separate script).** Use **account payment mode** (spender key) — simplest flow, single transaction:
+1. Single TronWeb instance pointing to `https://api.transatron.io` with spender key
+2. Check balances: token balance via `triggerConstantContract`, TFN balance via `GET /api/v1/config`
+3. Estimate regular Tron cost: `getChainParameters` → `getEnergyFee`/`getTransactionFee`, `triggerConstantContract` → `energy_used`, calculate total
+4. Get Transatron fee quote via `fullNode.request('wallet/triggersmartcontract', ...)` with `txLocal: true`
+5. Build locally via `_triggerSmartContractLocal`, prepare with solidified block via `prepareTransaction`, sign, broadcast
+6. Wait for confirmation: poll `getTransactionInfo` (1.5s intervals, 50 retries)
+7. Compare costs: TFN balance before/after via `/api/v1/config` vs regular Tron estimate
+
+**Key rules:** One TronWeb instance (Transatron only), account payment mode, `feeLimit` = `energy_used × energyFee` (never hardcode), fee quote via `fullNode.request()` (not `triggerSmartContract`), solidified block references via `prepareTransaction`, never send to self.
 
 ### Dual-Instance Pattern (Server-Side)
 
@@ -28,12 +71,22 @@ async function broadcast(tx: any, isEnergyApplied: boolean) {
 }
 ```
 
-## API Key Types
+## API Key Types and Endpoint Access
 
-| Key Type | Required For |
-|----------|-------------|
-| **Spender** | Account payment, coupon creation, delayed txs, `/api/v1/config`, `/api/v1/orders` |
-| **Non-spender** | Instant payments, coupon redemption, `getNodeInfo()`, fee quotes |
+| Endpoint Category | Non-spender | Spender | No Key |
+|-------------------|:-----------:|:-------:|:------:|
+| `wallet/getnodeinfo` | Yes | Yes | No |
+| `wallet/triggersmartcontract` (simulation) | Yes | Yes | No |
+| `wallet/broadcasttransaction` | Yes | Yes | No |
+| `walletsolidity/getnowblock` | Yes | Yes | No |
+| `wallet/getchainparameters` | Yes | Yes | No |
+| `wallet/getaccount` | Yes | Yes | No |
+| `/api/v1/config` | No | Yes | No |
+| `/api/v1/orders` | No | Yes | No |
+| `/api/v1/coupon` (create/delete) | No | Yes | No |
+| `/api/v1/register` | N/A | N/A | Yes |
+
+**When using a non-spender key**, fetch chain parameters and account info from the Transatron endpoint with a spender key, or from a public TRON node (e.g., TronGrid).
 
 ## Internal Balance Tokens
 
@@ -42,9 +95,15 @@ async function broadcast(tx: any, isEnergyApplied: boolean) {
 
 Query via `GET /api/v1/config`.
 
-## The `txLocal: true` Flag
+## Fee Simulation vs Local Transaction Building
 
-When `txLocal: true` is passed to `triggerSmartContract`, Transatron returns a fee quote in the `transatron` extension without broadcasting. This is how you get pricing before committing. Runnable example: [`estimate-fee.ts`](https://github.com/transatron/examples_tronweb/blob/main/src/examples/sending_tx/estimate-fee.ts)
+TronWeb 6.x processes `txLocal: true` client-side — the request never reaches the Transatron server. To get fee quotes from Transatron, you must send the request directly via `fullNode.request()`.
+
+**Two distinct operations — do not conflate them:**
+
+### 1. Simulate (get fee quote from Transatron server)
+
+Use `fullNode.request()` to bypass TronWeb's client-side interception. Runnable example: [`estimate-fee.ts`](https://github.com/transatron/examples_tronweb/blob/main/src/examples/sending_tx/estimate-fee.ts)
 
 ```typescript
 // 1. Estimate energy first
@@ -56,17 +115,39 @@ const chainParams = await tronWeb.trx.getChainParameters();
 const energyFee = chainParams.find(p => p.key === 'getEnergyFee')?.value ?? 100;
 const feeLimit = Math.ceil(energy_used * energyFee * 1.001);
 
-// 2. Get fee quote with calculated feeLimit
-const { transaction } = await tronWeb.transactionBuilder.triggerSmartContract(
-  contractAddress,
-  'transfer(address,uint256)',
-  { feeLimit, txLocal: true },
-  [{ type: 'address', value: to }, { type: 'uint256', value: amount }],
-  from
+// 2. Get fee quote via fullNode.request() — NOT triggerSmartContract
+const contractHex = tronWeb.address.toHex(contractAddress);
+const ownerHex = tronWeb.address.toHex(from);
+const params = [
+  { type: 'address', value: to },
+  { type: 'uint256', value: amount },
+];
+const options = { feeLimit, callValue: 0, txLocal: true };
+
+const args = tronWeb.transactionBuilder._getTriggerSmartContractArgs(
+  contractHex, 'transfer(address,uint256)', options, params, ownerHex,
+  0, '', options.callValue, options.feeLimit,
 );
 
-// transaction.transatron contains the fee quote
+const simResult = await tronWeb.fullNode.request(
+  'wallet/triggersmartcontract', args, 'post',
+);
+// simResult.transatron contains the fee quote
 ```
+
+### 2. Build locally (for signing and broadcasting)
+
+Use `_triggerSmartContractLocal` to build the unsigned transaction:
+
+```typescript
+const localTx = await tronWeb.transactionBuilder._triggerSmartContractLocal(
+  contractHex, 'transfer(address,uint256)',
+  { feeLimit, callValue: 0, txLocal: true }, params, ownerHex,
+);
+// localTx.transaction is the unsigned transaction — use prepareTransaction + sign
+```
+
+**Never use `triggerSmartContract` with `txLocal: true` and expect a Transatron fee quote.** TronWeb 6.x intercepts this flag and builds client-side, so the request never reaches Transatron.
 
 **Critical:** Never hardcode `feeLimit` (e.g., `100_000_000`). Transatron uses `feeLimit` to determine how much energy to delegate — an oversized value wastes resources, an undersized value causes failure. Always calculate from `energy_used × energyFee`.
 
@@ -77,10 +158,13 @@ const { transaction } = await tronWeb.transactionBuilder.triggerSmartContract(
 Fees auto-deduct from prepaid TFN/TFU balance on broadcast. Runnable example: [`send-trc20-account-payment.ts`](https://github.com/transatron/examples_tronweb/blob/main/src/examples/sending_tx/send-trc20-account-payment.ts)
 
 ```typescript
-// Setup: TronWeb with spender key
+// Setup: TronWeb with spender key (explicit providers for reliable header propagation)
+const hp = (url: string) =>
+  new providers.HttpProvider(url, 60_000, '', '', { 'TRANSATRON-API-KEY': spenderKey });
 const tronWeb = new TronWeb({
-  fullHost: 'https://api.transatron.io',
-  headers: { 'TRANSATRON-API-KEY': spenderKey },
+  fullNode: hp('https://api.transatron.io'),
+  solidityNode: hp('https://api.transatron.io'),
+  eventServer: hp('https://api.transatron.io'),
 });
 
 // Check balance
@@ -90,14 +174,16 @@ const config = await fetch('https://api.transatron.io/api/v1/config', {
 // config.payment_address — for depositing TRX to fund account
 // config.balance — current TFN/TFU balance
 
-// Just build, sign, broadcast — fees auto-deducted
-const { transaction } = await tronWeb.transactionBuilder.triggerSmartContract(
-  contractAddress,
-  'transfer(address,uint256)',
-  { feeLimit, txLocal: true } // feeLimit from energy estimation — never hardcode,
+// Build locally, prepare with solidified block, sign, broadcast — fees auto-deducted
+const contractHex = tronWeb.address.toHex(contractAddress);
+const ownerHex = tronWeb.address.toHex(from);
+const localTx = await tronWeb.transactionBuilder._triggerSmartContractLocal(
+  contractHex, 'transfer(address,uint256)',
+  { feeLimit, callValue: 0, txLocal: true },
   [{ type: 'address', value: to }, { type: 'uint256', value: amount }],
-  from
+  ownerHex,
 );
+const prepared = await prepareTransaction(tronWeb, localTx.transaction);
 
 const signed = await tronWeb.trx.sign(transaction);
 const result = await tronWeb.trx.sendRawTransaction(signed);
@@ -110,46 +196,64 @@ When balance reaches 0, bypass setting determines behavior: burn TRX from sender
 Two transactions per operation: fee payment first, then the main transaction. Runnable examples: [`send-trc20-instant-trx.ts`](https://github.com/transatron/examples_tronweb/blob/main/src/examples/sending_tx/send-trc20-instant-trx.ts), [`send-trc20-instant-usdt.ts`](https://github.com/transatron/examples_tronweb/blob/main/src/examples/sending_tx/send-trc20-instant-usdt.ts)
 
 ```typescript
-// Setup: TronWeb with non-spender key
+// Setup: TronWeb with non-spender key (explicit providers for reliable header propagation)
+const hp = (url: string) =>
+  new providers.HttpProvider(url, 60_000, '', '', { 'TRANSATRON-API-KEY': nonSpenderKey });
 const tronWeb = new TronWeb({
-  fullHost: 'https://api.transatron.io',
-  headers: { 'TRANSATRON-API-KEY': nonSpenderKey },
+  fullNode: hp('https://api.transatron.io'),
+  solidityNode: hp('https://api.transatron.io'),
+  eventServer: hp('https://api.transatron.io'),
 });
 
 // 1. Get deposit address from getNodeInfo()
 const nodeInfo = await tronWeb.trx.getNodeInfo();
 const depositAddress = nodeInfo.transatronInfo.deposit_address;
 
-// 2. Get fee quote via txLocal
-const { transaction: mainTx } = await tronWeb.transactionBuilder.triggerSmartContract(
-  contractAddress,
-  'transfer(address,uint256)',
-  { feeLimit, txLocal: true } // feeLimit from energy estimation — never hardcode,
+// 2. Get fee quote via fullNode.request() — NOT triggerSmartContract
+const contractHex = tronWeb.address.toHex(contractAddress);
+const ownerHex = tronWeb.address.toHex(from);
+const simArgs = tronWeb.transactionBuilder._getTriggerSmartContractArgs(
+  contractHex, 'transfer(address,uint256)',
+  { feeLimit, callValue: 0, txLocal: true },
   [{ type: 'address', value: to }, { type: 'uint256', value: amount }],
-  from
+  ownerHex, 0, '', 0, feeLimit,
 );
+const simResult = await tronWeb.fullNode.request(
+  'wallet/triggersmartcontract', simArgs, 'post',
+);
+const feeQuote = simResult.transatron; // contains fee amounts
 
-const feeQuote = mainTx.transatron; // contains fee amount
+// 3. Build main tx locally
+const localTx = await tronWeb.transactionBuilder._triggerSmartContractLocal(
+  contractHex, 'transfer(address,uint256)',
+  { feeLimit, callValue: 0, txLocal: true },
+  [{ type: 'address', value: to }, { type: 'uint256', value: amount }],
+  ownerHex,
+);
+const preparedMainTx = await prepareTransaction(tronWeb, localTx.transaction);
 
-// 3. Create fee payment tx (TRX is cheaper than USDT)
-const feeTx = await tronWeb.transactionBuilder.sendTrx(
+// 4. Create fee payment tx (TRX is cheaper than USDT)
+const rawFeeTx = await tronWeb.transactionBuilder.sendTrx(
   depositAddress,
-  feeQuote.fee_trx, // fee amount in SUN
+  feeQuote.tx_fee_rtrx_instant, // instant TRX fee in SUN
   from
 );
-const signedFeeTx = await tronWeb.trx.sign(feeTx);
+const preparedFeeTx = await prepareTransaction(tronWeb, rawFeeTx);
+const signedFeeTx = await tronWeb.trx.sign(preparedFeeTx);
 
-// 4. Broadcast fee tx, then main tx — back-to-back, NO verification in between
+// 5. Broadcast fee tx, then main tx — back-to-back, NO verification in between
 await tronWeb.trx.sendRawTransaction(signedFeeTx);
 
-// 5. Broadcast main tx immediately after fee tx
-const signedMainTx = await tronWeb.trx.sign(mainTx);
+// 6. Broadcast main tx immediately after fee tx
+const signedMainTx = await tronWeb.trx.sign(preparedMainTx);
 const result = await tronWeb.trx.sendRawTransaction(signedMainTx);
 ```
 
 **Critical: Do NOT check the fee deposit result before broadcasting the main transaction.** Transatron processes instant payment deposits and main transactions as a batch — both must arrive back-to-back. Inserting any verification, polling, or `await getTransactionInfo()` between the two broadcasts breaks the batch and causes Transatron to process them independently, which means the main transaction loses its energy sponsorship. Send both `sendRawTransaction` calls sequentially with no checks in between. Verify the final result only after the main transaction broadcast returns.
 
-7% pricing tolerance between estimate and broadcast. If the fee drifts beyond 7%, Transatron returns an `INSTANT_PAYMENT_UNDERPRICED` error and does not broadcast — resubmit `triggerSmartContract` with `txLocal: true` for an updated quote. TRX fee payment is cheaper than USDT.
+**Critical: Both fee and main transactions must use solidified block references.** Use `prepareTransaction()` (see `tron-developer-tronweb`) on both transactions before signing. Without this, micro-forks can cause TAPOS_ERROR and break the back-to-back broadcast batch.
+
+7% pricing tolerance between estimate and broadcast. If the fee drifts beyond 7%, Transatron returns an `INSTANT_PAYMENT_UNDERPRICED` error and does not broadcast — resubmit the simulation via `fullNode.request()` for an updated quote. TRX fee payment is cheaper than USDT.
 
 If the user has insufficient USDT for an instant payment, both the payment and primary transactions are batched and Transatron returns a `NOT_ENOUGH_FUNDS` error without broadcasting either transaction.
 
@@ -219,14 +323,16 @@ Extend expiration, regenerate txID, sign with special parameters, broadcast with
 ```typescript
 import { newTxID } from 'transatron-utils'; // or implement locally
 
-// 1. Build the transaction normally
-const { transaction } = await tronWeb.transactionBuilder.triggerSmartContract(
-  contractAddress,
-  'transfer(address,uint256)',
-  { feeLimit, txLocal: true } // feeLimit from energy estimation — never hardcode,
+// 1. Build the transaction locally
+const contractHex = tronWeb.address.toHex(contractAddress);
+const ownerHex = tronWeb.address.toHex(from);
+const localTx = await tronWeb.transactionBuilder._triggerSmartContractLocal(
+  contractHex, 'transfer(address,uint256)',
+  { feeLimit, callValue: 0, txLocal: true },
   [{ type: 'address', value: to }, { type: 'uint256', value: amount }],
-  from
+  ownerHex,
 );
+const { transaction } = localTx;
 
 // 2. Bump expiration by 1-12 hours
 const newExpiration = transaction.raw_data.expiration + (4 * 60 * 60 * 1000); // +4h
@@ -340,7 +446,17 @@ All endpoints are on the Transatron `fullHost` base URL.
 
 Key Transatron response fields to type when writing integration code:
 
-- **Fee quote** (`transaction.transatron`): `fee_trx` (SUN), `fee_usdt` (micro-USDT), `energy_needed`, `message` (hex-encoded), `tx_fee_rtrx_account` (TFN SUN), `tx_fee_rusdt_account` (TFU micro-USDT)
+- **Fee quote** (`result.transatron` from simulation via `fullNode.request()`):
+  - `tx_fee_rtrx_instant` — instant payment fee in TRX (SUN). Use for instant TRX payment mode.
+  - `tx_fee_rusdt_instant` — instant payment fee in USDT (micro-USDT). Use for instant USDT payment mode.
+  - `tx_fee_rtrx_account` — account payment fee in TFN (SUN). Auto-deducted on broadcast with spender key.
+  - `tx_fee_rusdt_account` — account payment fee in TFU (micro-USDT).
+  - `tx_fee_burn_trx` — what regular Tron would burn (SUN). Use for cost comparison display.
+  - `energy_needed` — energy units the transaction requires
+  - `message` — hex-encoded status message (decode with `hexToUnicode()`)
+  - `code` — status code (check for errors)
+  - `user_account_balance_rtrx` — current TFN balance (SUN)
+  - `user_account_balance_rusdt` — current TFU balance (micro-USDT)
 - **Broadcast result** (`transatron` extension): `status`, `fee_paid`, `message` (hex-encoded)
 - **Node info** (`transatronInfo`): `deposit_address`, `supported_tokens[]`
 - **Coupon**: attach as `signedTx.coupon = couponId` before broadcasting
@@ -396,7 +512,7 @@ const response = await fetch('https://api.transatron.io/api/v1/register', {
   headers: { 'Content-Type': 'application/json' },
   body: JSON.stringify({
     transaction: signedTx,
-    email: 'user@example.com',
+    email: process.env.REGISTRATION_EMAIL, // user's real email — becomes dashboard login
   }),
 });
 const result = await response.json();
@@ -421,8 +537,10 @@ const result = await response.json();
 ### Critical Notes
 
 - **Credentials are returned once** — store `spender_api_key`, `non_spender_api_key`, and `password` immediately
+- **Email is the dashboard login** — the email address submitted during registration becomes the account's login credential for https://te.transatron.io. Combined with the returned `password`, it grants full dashboard access (key management, balance monitoring, settings). When implementing agentic registration, **always prompt the user for their real email** — never use placeholder values like `test@example.com`. A placeholder email means the user permanently loses dashboard access for that account.
 - No Transatron API key is needed for the registration call itself — the endpoint is unauthenticated
 - Use a public TRON node (e.g., TronGrid) to build the deposit transaction, not Transatron
+- **Implement registration as a standalone script**, separate from any transaction logic. Registration is a one-time, irreversible operation that deposits real TRX and returns credentials that must be stored immediately. Never embed it as a conditional "Phase 0" inside a transfer or business logic script — the user should explicitly choose to register, review the returned credentials, and confirm they are persisted before proceeding to use them.
 
 ## Balance Replenishment
 

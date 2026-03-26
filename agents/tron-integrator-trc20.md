@@ -95,6 +95,8 @@ async function transferTRC20(
 }
 ```
 
+**Do not send TRC-20 tokens to the sender's own address for testing.** Some TRC-20 contracts reject self-transfers (the EVM `require(to != msg.sender)` pattern). Even when allowed, the balance doesn't change, making it useless for verifying the transfer worked. When building test scripts, always ask the user for a distinct recipient address.
+
 ## TRC-20 Approve
 
 Same pattern as transfer above — change selector to `approve(address,uint256)` and parameters to `[{ type: 'address', value: spender }, { type: 'uint256', value: amount }]`.
@@ -143,6 +145,24 @@ const USDT_ENERGY_FALLBACKS = {
 ```
 
 For non-USDT TRC-20 tokens without dynamic energy penalty, base energy is much lower (transfer ~13,500-29,650, transferFrom ~13,400-35,700, approve ~7,350-22,700). Always prefer `triggerconstantcontract` estimation over fallback values.
+
+## Quick Reference: USDT Transfer Cost Ranges
+
+These are **approximate** cost ranges when TRX is burned (no staked resources, no Transatron). Always estimate per-transaction — these are for planning and sanity-checking only.
+
+Current chain parameters (query `getchainparameters` for live values):
+- `getEnergyFee`: 100 SUN/unit
+- `getTransactionFee`: 1,000 SUN/byte
+
+| Scenario | Energy | Energy Cost | Bandwidth Cost | Total |
+|----------|--------|-------------|----------------|-------|
+| USDT transfer (existing holder) | ~32,000–65,000 | 3.2–6.5 TRX | ~0.35 TRX | ~3.5–6.9 TRX |
+| USDT transfer (first-time recipient) | ~65,000–131,000 | 6.5–13.1 TRX | ~0.35 TRX | ~6.9–13.5 TRX |
+| USDT transferFrom (max approval) | ~65,000–131,000 | 6.5–13.1 TRX | ~0.35 TRX | ~6.9–13.5 TRX |
+| USDT transferFrom (finite approval) | ~78,000–156,000 | 7.8–15.6 TRX | ~0.35 TRX | ~8.2–16.0 TRX |
+| USDT approve | ~50,000–100,000 | 5.0–10.0 TRX | ~0.35 TRX | ~5.4–10.4 TRX |
+
+**These values change when governance adjusts `getEnergyFee`.** At the historical 420 SUN/unit, the same USDT transfer cost 27–55 TRX. Always query chain parameters — never cite these numbers as fixed.
 
 ## Agent Delegation
 

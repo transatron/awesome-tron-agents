@@ -35,6 +35,8 @@ Non-custodial wallets can set custom energy prices for their users. The spread b
 
 Integration requires only changing the RPC endpoint URL and adding an API key header. All standard TronWeb calls continue to work as-is.
 
+After initial account setup, use Transatron as the **only** RPC endpoint. Maintaining a separate TronGrid connection adds complexity and rate-limiting risk without benefit — Transatron proxies all standard TRON RPC calls. The only exception is the initial registration step, which requires a public node (no Transatron API key exists yet).
+
 ## Integration Patterns
 
 ### Pattern 1: Custody (Exchanges, Payment Processors)

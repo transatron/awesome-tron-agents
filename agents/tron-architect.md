@@ -95,6 +95,8 @@ For TRC-20 implementation code, energy estimation patterns, and operation-specif
 
 Critical: Always use `triggerconstantcontract` to estimate per-transaction — never hardcode energy values. The `energy_used` response already includes the dynamic penalty.
 
+**USDT transfer worst-case cost at current parameters** (getEnergyFee=100): 131,000 energy × 100 SUN + ~345 bandwidth × 1,000 SUN ≈ **13.45 TRX**. At historical getEnergyFee=420, the same transfer cost ~55 TRX. Always query live values.
+
 ### Hardcoding Anti-Patterns
 
 When reviewing code, flag these common hardcoding mistakes and advise refactoring:

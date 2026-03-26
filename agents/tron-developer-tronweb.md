@@ -16,14 +16,13 @@ Standard setup with API key authentication:
 ```typescript
 import { TronWeb, providers } from 'tronweb';
 
+const hp = (url: string, headers: Record<string, string> = {}) =>
+  new providers.HttpProvider(url, 30_000, '', '', headers);
+
 const tronWeb = new TronWeb({
-  fullHost: new providers.HttpProvider('https://api.trongrid.io', 30_000),
-  solidityNode: new providers.HttpProvider('https://api.trongrid.io', 30_000),
+  fullNode: hp('https://api.trongrid.io', { 'TRON-PRO-API-KEY': process.env.TRON_API_KEY! }),
+  solidityNode: hp('https://api.trongrid.io', { 'TRON-PRO-API-KEY': process.env.TRON_API_KEY! }),
   disablePlugins: true,
-  headers: {
-    'TRON-PRO-API-KEY': process.env.TRON_API_KEY,
-    // or 'TRANSATRON-API-KEY' when using Transatron as fullHost
-  },
   privateKey: process.env.TRON_PRIVATE_KEY, // optional, for server-side signing
 });
 ```
@@ -33,6 +32,7 @@ const tronWeb = new TronWeb({
 - Set `solidityNode` to the same URL for confirmed-block queries (defaults to `fullHost` otherwise)
 - Set `disablePlugins: true` to skip loading unnecessary TronWeb plugins in server environments
 - When using Transatron as the `fullHost`, both `TRANSATRON-API-KEY` and `TRON-PRO-API-KEY` headers are accepted
+- **Rate limiting:** TronGrid rate-limits unauthenticated requests (~10-15 req/s). For production, register for a free API key at https://www.trongrid.io and pass it via the `TRON-PRO-API-KEY` header. Scripts making multiple sequential RPC calls without a key will hit 429 errors.
 
 ## TRX Transfer Flow
 
@@ -81,6 +81,8 @@ const result = await tronWeb.trx.sendRawTransaction(signed);
 ```
 
 For TRC-20 specific operations (transfer, approve, transferFrom, balance queries, energy fallbacks), use the `tron-integrator-trc20` agent — it has verified energy tables, USDT dynamic penalty handling, and operation-specific fallback values.
+
+**`txLocal: true` caveat:** When `txLocal: true` is set, `triggerSmartContract` builds the transaction entirely client-side in TronWeb 6.x — no network request is made. This means middleware features (like Transatron's fee quote injection) are bypassed. If you need server-side processing with `txLocal: true`, use `fullNode.request('wallet/triggersmartcontract', args, 'post')` directly. See `transatron-integrator` for the correct simulation pattern.
 
 **Never hardcode chain parameters or energy estimates.** When reviewing or writing code, refactor these common anti-patterns:
 - `getEnergyFee` hardcoded as `420`, `210`, `100` → query from `getchainparameters`
@@ -331,6 +333,35 @@ async function waitForConfirmation(
   throw new Error(`Transaction ${txId} not confirmed after ${maxRetries} retries`);
 }
 ```
+
+### Solidified Block References (Preventing TAPOS_ERROR)
+
+Every TRON transaction includes a reference block (`ref_block_bytes` + `ref_block_hash`). The node validates this via TAPOS. TronWeb's default uses the latest unconfirmed block, which may be part of a micro-fork that gets discarded.
+
+For production use, replace the reference with a solidified (irreversible) block before signing:
+
+```typescript
+async function prepareTransaction(tronWeb: TronWeb, tx: any): Promise<any> {
+  const prepared = JSON.parse(JSON.stringify(tx));
+  const block = await tronWeb.trx.getConfirmedCurrentBlock();
+  const blockNumber = block.block_header.raw_data.number;
+  const blockTimestamp = block.block_header.raw_data.timestamp;
+
+  prepared.raw_data.ref_block_bytes = blockNumber.toString(16).slice(-4).padStart(4, '0');
+  prepared.raw_data.ref_block_hash = block.blockID.slice(16, 32);
+  prepared.raw_data.timestamp = blockTimestamp;
+  prepared.raw_data.expiration = blockTimestamp + 60 * 1000; // 1 minute
+
+  const updated = await tronWeb.transactionBuilder.newTxID(prepared);
+  prepared.txID = updated.txID;
+  prepared.raw_data = updated.raw_data;
+  prepared.raw_data_hex = updated.raw_data_hex;
+  prepared.visible = updated.visible;
+  return prepared;
+}
+```
+
+Use this after building any transaction and before `trx.sign()`. Essential for Transatron instant payments where two transactions must both land on-chain.
 
 ### TRC-20 Operations
 
