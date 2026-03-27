@@ -58,6 +58,34 @@ mkdir -p .claude/agents
 cp agents/*.md .claude/agents/
 ```
 
+## Quick Start: Sending USDT Transfers
+
+Send a real USDT transfer on TRON with optimized fees — agents handle the code generation.
+
+**Prerequisites:** A TRON wallet with >30 TRX (for registration deposit) and some USDT.
+
+```bash
+# 1. Create project and .env
+mkdir tron-usdt-test && cd tron-usdt-test
+cat > .env << 'EOF'
+WALLET_PK=<your-private-key>
+RECIPIENT_ADDRESS=<distinct-wallet-address>
+REGISTRATION_EMAIL=<your-real-email>
+EOF
+
+# 2. Install agents
+claude plugin marketplace add transatron/awesome-tron-agents
+claude plugin install awesome-tron-agents --scope local
+
+# 3. Let Claude do the rest
+claude -p "Register on Transatron using my email, save credentials to .env, \
+then create a script that sends 0.01 USDT to RECIPIENT_ADDRESS via Transatron. \
+Compare the cost with a regular TRON transfer. Use credentials from .env. \
+I prefer a TypeScript stack."
+```
+
+> **Note:** The registration email becomes your dashboard login — use a real address, not a placeholder.
+
 ## Usage
 
 Once installed, Claude Code automatically routes TRON-related questions to the appropriate agent based on the task. You can also invoke them directly:
