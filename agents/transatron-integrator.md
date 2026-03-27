@@ -185,8 +185,34 @@ const localTx = await tronWeb.transactionBuilder._triggerSmartContractLocal(
 );
 const prepared = await prepareTransaction(tronWeb, localTx.transaction);
 
-const signed = await tronWeb.trx.sign(transaction);
+const signed = await tronWeb.trx.sign(prepared);
 const result = await tronWeb.trx.sendRawTransaction(signed);
+```
+
+**Batch operations (fire-and-forget pattern):** When sending multiple transactions, broadcast without awaiting the response and poll for confirmation afterward. This avoids blocking on Transatron's queue processing between sends:
+
+```typescript
+// Broadcast without awaiting — use fixed pacing (2s interval) between sends
+broadcastTransaction(tronWeb, signedTx, { waitForConfirmation: false }).then(
+  (res) => console.log(`${signedTx.txID} broadcast done`),
+  (err) => console.error(`${signedTx.txID} broadcast error:`, err),
+);
+await sleep(2000); // pacing between sends
+
+// After all broadcasts: wait 10s, then poll with retry
+const RETRY_INTERVAL_MS = 5_000;
+const MAX_RETRIES = 10;
+for (let attempt = 0; pending.size > 0 && attempt <= MAX_RETRIES; attempt++) {
+  for (const txId of txIds) {
+    const txReceipt = await tronWeb.trx.getTransaction(txId).catch(() => null);
+    const txInfo = await tronWeb.trx.getTransactionInfo(txId).catch(() => null);
+    const contractRet = isEmpty(txReceipt) ? 'NOT_FOUND' : txReceipt.ret[0].contractRet;
+    const netUsage = txInfo?.receipt?.net_usage ?? 0;
+    // Pending if NOT_FOUND or SUCCESS with zero net_usage (queued but not yet on-chain)
+    const isPending = contractRet === 'NOT_FOUND' || (contractRet === 'SUCCESS' && netUsage === 0);
+  }
+  await sleep(RETRY_INTERVAL_MS);
+}
 ```
 
 When balance reaches 0, bypass setting determines behavior: burn TRX from sender or return error. See [Balance Replenishment](#balance-replenishment).
@@ -318,11 +344,9 @@ if (!status.is_used && status.valid_to < Date.now()) {
 
 ### 4. Delayed Transactions
 
-Extend expiration, regenerate txID, sign with special parameters, broadcast without waiting. Runnable example: [`send-trc20-delayed.ts`](https://github.com/transatron/examples_tronweb/blob/main/src/examples/sending_tx/send-trc20-delayed.ts)
+Extend expiration via `prepareTransaction()`, sign with special parameters, broadcast without waiting. Runnable example: [`send-trc20-delayed.ts`](https://github.com/transatron/examples_tronweb/blob/main/src/examples/sending_tx/send-trc20-delayed.ts)
 
 ```typescript
-import { newTxID } from 'transatron-utils'; // or implement locally
-
 // 1. Build the transaction locally
 const contractHex = tronWeb.address.toHex(contractAddress);
 const ownerHex = tronWeb.address.toHex(from);
@@ -332,32 +356,29 @@ const localTx = await tronWeb.transactionBuilder._triggerSmartContractLocal(
   [{ type: 'address', value: to }, { type: 'uint256', value: amount }],
   ownerHex,
 );
-const { transaction } = localTx;
 
-// 2. Bump expiration by 1-12 hours
-const newExpiration = transaction.raw_data.expiration + (4 * 60 * 60 * 1000); // +4h
-transaction.raw_data.expiration = newExpiration;
+// 2. Solidified block + bump expiration (1-12 hours) — single call
+const prepared = await prepareTransaction(tronWeb, localTx.transaction, {
+  expirationMinutes: 240, // 4 hours
+});
 
-// 3. Regenerate txID after modifying raw_data
-transaction.txID = newTxID(transaction);
+// 3. Sign with 4 args: (tx, privateKey, false, false)
+const signed = await tronWeb.trx.sign(prepared, privateKey, false, false);
 
-// 4. Sign with 4 args: (tx, privateKey, false, false)
-const signed = await tronWeb.trx.sign(transaction, privateKey, false, false);
-
-// 5. Broadcast — does not wait for on-chain confirmation
+// 4. Broadcast — does not wait for on-chain confirmation
 const result = await tronWeb.trx.sendRawTransaction(signed);
+
+// 5. Force immediate processing if needed (wait ~10s for queue)
+await fetch('https://api.transatron.io/api/v1/pendingtxs/flush', {
+  method: 'POST',
+  headers: { 'TRANSATRON-API-KEY': spenderKey },
+});
 
 // 6. Check pending transactions
 const pending = await fetch(
   `https://api.transatron.io/api/v1/pendingtxs?address=${from}`,
   { headers: { 'TRANSATRON-API-KEY': spenderKey } }
 ).then(r => r.json());
-
-// 7. Force immediate processing if needed
-await fetch('https://api.transatron.io/api/v1/pendingtxs/flush', {
-  method: 'POST',
-  headers: { 'TRANSATRON-API-KEY': spenderKey },
-});
 ```
 
 ## Critical Gotchas
@@ -380,7 +401,13 @@ function hexToUnicode(hex: string): string {
 
 ### Broadcast Polling
 
-After broadcasting, poll `getTransactionInfo` with 1.5s intervals (up to 50 retries). Check `receipt.result` for `SUCCESS`/`FAILED`/`REVERT`. See `tron-developer-tronweb` for the `waitForConfirmation` implementation.
+After broadcasting, wait 10s for Transatron queue processing, then poll with 5s intervals (up to 10 retries). Use a two-step status check:
+1. `getTransaction(txId)` → extract `ret[0].contractRet`
+2. `getTransactionInfo(txId)` → extract `receipt.net_usage`
+
+**Pending detection:** A transaction is still pending if `contractRet === 'NOT_FOUND'` OR `(contractRet === 'SUCCESS' && netUsage === 0)` — the latter means Transatron has queued it but it hasn't landed on-chain yet.
+
+See `tron-developer-tronweb` for the `waitForConfirmation` implementation.
 
 ### Fee Priority Order
 
@@ -498,12 +525,13 @@ const publicTronWeb = new TronWeb({
 
 const senderAddress = publicTronWeb.defaultAddress.base58 as string;
 
-// 2. Build deposit tx — do NOT broadcast
-const unsignedTx = await publicTronWeb.transactionBuilder.sendTrx(
+// 2. Build deposit tx with solidified block reference — do NOT broadcast
+const rawTx = await publicTronWeb.transactionBuilder.sendTrx(
   DEPOSIT_ADDRESS,
   DEPOSIT_AMOUNT_SUN,
   senderAddress,
 );
+const unsignedTx = await prepareTransaction(publicTronWeb, rawTx);
 const signedTx = await publicTronWeb.trx.sign(unsignedTx);
 
 // 3. Register via unauthenticated Transatron endpoint

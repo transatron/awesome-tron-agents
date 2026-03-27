@@ -336,21 +336,41 @@ async function waitForConfirmation(
 
 ### Solidified Block References (Preventing TAPOS_ERROR)
 
-Every TRON transaction includes a reference block (`ref_block_bytes` + `ref_block_hash`). The node validates this via TAPOS. TronWeb's default uses the latest unconfirmed block, which may be part of a micro-fork that gets discarded.
+Every TRON transaction includes a reference block (`ref_block_bytes` + `ref_block_hash`). The node validates this via TAPOS: it looks up the referenced block in its RecentBlockStore (sliding window of 65,536 blocks ≈ 54 hours) and compares the hash. TronWeb's default uses the latest unconfirmed block, which may be part of a micro-fork that gets discarded — causing TAPOS_ERROR.
 
 For production use, replace the reference with a solidified (irreversible) block before signing:
 
 ```typescript
-async function prepareTransaction(tronWeb: TronWeb, tx: any): Promise<any> {
-  const prepared = JSON.parse(JSON.stringify(tx));
-  const block = await tronWeb.trx.getConfirmedCurrentBlock();
+type MutableTransaction = Types.Transaction & {
+  raw_data: Types.Transaction['raw_data'] & { expiration: number };
+};
+
+type RefBlockSource = 'solidified' | 'latest';
+
+interface PrepareOptions {
+  refBlock?: RefBlockSource;       // Default: 'solidified'
+  expirationMinutes?: number;      // Default: 1
+}
+
+async function prepareTransaction(
+  tronWeb: TronWeb,
+  tx: MutableTransaction,
+  options: PrepareOptions = {},
+): Promise<MutableTransaction> {
+  const { refBlock = 'solidified', expirationMinutes = 1 } = options;
+  const prepared = JSON.parse(JSON.stringify(tx)) as MutableTransaction;
+
+  const block = refBlock === 'solidified'
+    ? await tronWeb.trx.getConfirmedCurrentBlock()   // walletsolidity/getnowblock
+    : await tronWeb.trx.getCurrentBlock();            // wallet/getnowblock
+
   const blockNumber = block.block_header.raw_data.number;
   const blockTimestamp = block.block_header.raw_data.timestamp;
 
   prepared.raw_data.ref_block_bytes = blockNumber.toString(16).slice(-4).padStart(4, '0');
   prepared.raw_data.ref_block_hash = block.blockID.slice(16, 32);
   prepared.raw_data.timestamp = blockTimestamp;
-  prepared.raw_data.expiration = blockTimestamp + 60 * 1000; // 1 minute
+  prepared.raw_data.expiration = blockTimestamp + expirationMinutes * 60 * 1000;
 
   const updated = await tronWeb.transactionBuilder.newTxID(prepared);
   prepared.txID = updated.txID;
@@ -361,7 +381,7 @@ async function prepareTransaction(tronWeb: TronWeb, tx: any): Promise<any> {
 }
 ```
 
-Use this after building any transaction and before `trx.sign()`. Essential for Transatron instant payments where two transactions must both land on-chain.
+Use this after building any transaction and before `trx.sign()`. The `expirationMinutes` option also consolidates the expiration-bump pattern used by delayed transactions — pass `{ expirationMinutes: 240 }` instead of modifying `raw_data.expiration` manually. Essential for Transatron instant payments where two transactions must both land on-chain.
 
 ### TRC-20 Operations
 
