@@ -5,7 +5,7 @@
     "url": "https://transatron.io"
   },
   "metadata": {
-    "version": "1.0.3",
+    "version": "1.0.4",
     "description": "Specialized Claude Code agents for TRON blockchain development with TronWeb and Transatron"
   },
   "plugins": [
@@ -13,7 +13,7 @@
       "name": "awesome-tron-agents",
       "source": "./agents",
       "description": "Expert agents for TRON DApp development — TronWeb usage patterns and Transatron fee optimization integration",
-      "version": "1.0.3",
+      "version": "1.0.4",
       "category": "development",
       "keywords": ["tron", "tronweb", "transatron", "trc20", "usdt", "blockchain", "dapp"]
     }
