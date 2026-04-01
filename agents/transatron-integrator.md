@@ -359,7 +359,7 @@ const localTx = await tronWeb.transactionBuilder._triggerSmartContractLocal(
 
 // 2. Solidified block + bump expiration (1-12 hours) — single call
 const prepared = await prepareTransaction(tronWeb, localTx.transaction, {
-  expirationMinutes: 240, // 4 hours
+  expirationSeconds: 14400, // 4 hours
 });
 
 // 3. Sign with 4 args: (tx, privateKey, false, false)

@@ -169,10 +169,9 @@ const { transaction } = await tronWeb.fullNode.request<any>(
   'POST',
 );
 
-// 6. Bump expiration + regenerate txID + sign
-transaction.raw_data.expiration += 1000 * 60 * 15; // +15 minutes
-transaction.txID = newTxID(transaction);
-const signed = await tronWeb.trx.sign(transaction, privateKey, false, false);
+// 6. Solidified block + extended expiration (15 min for zk-SNARK processing) + sign
+const prepared = await prepareTransaction(tronWeb, transaction, { expirationSeconds: 900 });
+const signed = await tronWeb.trx.sign(prepared, privateKey, false, false);
 ```
 
 ## Transfer Flow
@@ -319,10 +318,9 @@ const { transaction } = await tronWeb.fullNode.request<any>(
   'POST',
 );
 
-// 7. Bump expiration + regenerate txID + sign
-transaction.raw_data.expiration += 1000 * 60 * 15;
-transaction.txID = newTxID(transaction);
-const signed = await tronWeb.trx.sign(transaction, privateKey, false, false);
+// 7. Solidified block + extended expiration (15 min for zk-SNARK processing) + sign
+const prepared = await prepareTransaction(tronWeb, transaction, { expirationSeconds: 900 });
+const signed = await tronWeb.trx.sign(prepared, privateKey, false, false);
 ```
 
 ## Burn Flow
@@ -477,15 +475,12 @@ const { transaction } = await tronWeb.fullNode.request<any>(
   'POST',
 );
 
-// 2. Bump expiration to allow zk-SNARK processing time
-transaction.raw_data.expiration += 1000 * 60 * 15; // +15 minutes
+// 2. Solidified block + extended expiration (15 min for zk-SNARK processing)
+// Also adds jitter to prevent duplicate hashes when building multiple txs rapidly
+const prepared = await prepareTransaction(tronWeb, transaction, { expirationSeconds: 900 });
 
-// 3. Regenerate txID after modifying raw_data
-transaction.txID = newTxID(transaction);
-// newTxID regenerates txID, raw_data_hex, and visible fields from raw_data
-
-// 4. Sign with 4 args — 3rd/4th false disable multisig and permission-id checks
-const signed = await tronWeb.trx.sign(transaction, privateKey, false, false);
+// 3. Sign with 4 args — 3rd/4th false disable multisig and permission-id checks
+const signed = await tronWeb.trx.sign(prepared, privateKey, false, false);
 ```
 
 ## Post-Burn Transfer
@@ -531,7 +526,7 @@ See the `transatron-integrator` agent for full coupon and account payment implem
 3. **Max 2 notes per spend** — if you need to spend more value than 2 notes cover, consolidate first via a shielded transfer to yourself
 4. **Change note required** — when spending more than sending, always create a change note back to the sender's z-addr, otherwise the excess is lost
 5. **Error field check** — always check `param.Error` on `createshieldedcontractparameters` responses before proceeding
-6. **Extended expiration** — shielded txs need +15 min expiration to allow zk-SNARK proof verification time
+6. **prepareTransaction required** — shielded txs need `prepareTransaction(tronWeb, tx, { expirationSeconds: 900 })` for solidified block references (prevents TAPOS_ERROR), jitter (prevents duplicate hashes), and extended expiration (15 min for zk-SNARK processing). See `tron-developer-tronweb` for the implementation.
 7. **4-arg sign** — `tronWeb.trx.sign(tx, privateKey, false, false)` — the two `false` params disable multisig and permission-id validation
 
 When helping developers, always:
@@ -539,4 +534,4 @@ When helping developers, always:
 2. Use `wallet/getrcm` for every new note — never reuse commitments
 3. Check `is_spent` when selecting notes to avoid double-spend attempts
 4. Simulate with `triggerconstantcontract` before building the real transaction
-5. Follow the bump-expiration → newTxID → sign(tx, pk, false, false) pattern for all shielded ops
+5. Follow the prepareTransaction → sign(tx, pk, false, false) pattern for all shielded ops (see `tron-developer-tronweb`)

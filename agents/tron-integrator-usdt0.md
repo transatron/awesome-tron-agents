@@ -237,16 +237,12 @@ async function signSendUsdt0(
     owner,
   );
 
-  // 4. Extend expiration by 5 minutes and re-hash
-  tx.transaction.raw_data.expiration += 1000 * 60 * 5;
-  const updatedTx = await tronWeb.transactionBuilder.newTxID(tx.transaction);
-  tx.transaction.txID = updatedTx.txID;
-  tx.transaction.raw_data = updatedTx.raw_data;
-  tx.transaction.raw_data_hex = updatedTx.raw_data_hex;
-  tx.transaction.visible = updatedTx.visible;
+  // 4. Solidified block + extended expiration (5 min for cross-chain processing)
+  // Also adds jitter to prevent duplicate hashes when building multiple txs rapidly
+  const prepared = await prepareTransaction(tronWeb, tx.transaction, { expirationSeconds: 300 });
 
   // 5. Sign
-  const signedTx = await tronWeb.trx.sign(tx.transaction, privateKey, false, false);
+  const signedTx = await tronWeb.trx.sign(prepared, privateKey, false, false);
 
   return {
     hash: signedTx.txID,
@@ -264,7 +260,7 @@ async function signSendUsdt0(
 **Key details:**
 - `feeLimit` is calculated as `400,000 × energyFee` — 400k energy is the estimate for the `send()` operation
 - `callValue` is set to the `nativeFee` returned by `quoteSend` — this is the TRX paid to LayerZero for cross-chain messaging
-- Expiration is extended by 5 minutes (`+ 1000 * 60 * 5`) and the transaction is re-hashed via `newTxID()` to account for the updated expiration
+- `prepareTransaction()` switches to a solidified reference block (prevents TAPOS_ERROR), adds jitter (prevents duplicate hashes for rapid-fire sends), and extends expiration by 5 minutes for cross-chain processing time. See `tron-developer-tronweb` for the implementation.
 - The function signature includes the full tuple types: `send((uint32,bytes32,uint256,uint256,bytes,bytes,bytes),(uint256,uint256),address)`
 
 ## Transatron Integration for Gasless USDT0
