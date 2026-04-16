@@ -183,11 +183,15 @@ const localTx = await tronWeb.transactionBuilder._triggerSmartContractLocal(
   [{ type: 'address', value: to }, { type: 'uint256', value: amount }],
   ownerHex,
 );
-const prepared = await prepareTransaction(tronWeb, localTx.transaction);
+const prepared = await prepareTransaction(tronWeb, localTx.transaction, {
+  expirationSeconds: 600, // 10 minutes — recommended minimum for non-delayed txs
+});
 
 const signed = await tronWeb.trx.sign(prepared);
 const result = await tronWeb.trx.sendRawTransaction(signed);
 ```
+
+**Extend expiration even for non-delayed transactions.** The default TRON expiration is ~1 minute, which leaves very little room for Transatron's queue processing. Use at least 10 minutes (`expirationSeconds: 600`) for standard account-payment broadcasts. For delayed transactions, use 1–12 hours (see [Delayed Transactions](#4-delayed-transactions)).
 
 **Batch operations (fire-and-forget pattern):** When sending multiple transactions, broadcast without awaiting the response and poll for confirmation afterward. This avoids blocking on Transatron's queue processing between sends:
 
@@ -256,7 +260,9 @@ const localTx = await tronWeb.transactionBuilder._triggerSmartContractLocal(
   [{ type: 'address', value: to }, { type: 'uint256', value: amount }],
   ownerHex,
 );
-const preparedMainTx = await prepareTransaction(tronWeb, localTx.transaction);
+const preparedMainTx = await prepareTransaction(tronWeb, localTx.transaction, {
+  expirationSeconds: 600, // 10 minutes — recommended minimum
+});
 
 // 4. Create fee payment tx (TRX is cheaper than USDT)
 const rawFeeTx = await tronWeb.transactionBuilder.sendTrx(
@@ -264,7 +270,9 @@ const rawFeeTx = await tronWeb.transactionBuilder.sendTrx(
   feeQuote.tx_fee_rtrx_instant, // instant TRX fee in SUN
   from
 );
-const preparedFeeTx = await prepareTransaction(tronWeb, rawFeeTx);
+const preparedFeeTx = await prepareTransaction(tronWeb, rawFeeTx, {
+  expirationSeconds: 600,
+});
 const signedFeeTx = await tronWeb.trx.sign(preparedFeeTx);
 
 // 5. Broadcast fee tx, then main tx — back-to-back, NO verification in between
@@ -346,10 +354,38 @@ if (!status.is_used && status.valid_to < Date.now()) {
 
 Extend expiration via `prepareTransaction()`, sign with special parameters, broadcast without waiting. Runnable example: [`send-trc20-delayed.ts`](https://github.com/transatron/examples_tronweb/blob/main/src/examples/sending_tx/send-trc20-delayed.ts)
 
+> **⚠️ Correct per-tx energy estimation is an absolute must-have for delayed transactions.** Unlike standard on-chain transactions — where an oversized `fee_limit` merely caps the maximum a signer might burn — Transatron reserves resources up-front for the full quoted amount of each queued delayed tx. A hardcoded or padded `fee_limit` silently inflates the quoted price of every delayed tx and, because delayed txs sit in the queue for hours, the inflated quotes stack against your TFN/TFU balance. Teams that skip estimation and submit a flat 1,000,000-energy `fee_limit` typically end up paying ~15× the real cost per tx and hit `Not enough balance to process transactions` on the batch.
+>
+> **Mandatory checklist before enabling delayed mode in production:**
+> 1. **Estimate every transaction individually.** Call `triggerConstantContract` (or `wallet/estimateenergy`) immediately before each delayed tx and set `feeLimit = Math.ceil(energy_used * energyFee * 1.2)`. No flat defaults. No shared estimates across recipients.
+> 2. **Enforce a hard ceiling on `feeLimit`.** Reject or fall back to safe values if estimation returns an unexpectedly large number. A typical TRC-20 transfer is ~65k energy — anything approaching 1M is a bug.
+> 3. **Dry-run the quoted fee.** Simulate via `fullNode.request('wallet/triggersmartcontract', ...)` and inspect `transatron.tx_fee_rtrx_account`. If the quote is far above the regular-Tron reference (`tx_fee_burn_trx`), you are over-sizing `feeLimit` — fix estimation, don't prefund more balance.
+> 4. **Track PENDING state per target address and never re-broadcast while a prior submission is still queued.** Every duplicate PENDING multiplies the balance required to clear the batch. Use `GET /api/v1/pendingtxs?address=...` as the source of truth before submitting another tx for the same sender/target, and avoid scheduled "retry every N minutes" loops that re-send the same payload.
+> 5. **Size the TFN/TFU balance for the full queued batch, not per tx.** Required balance = Σ (quoted fee per queued tx). If any tx in the batch cannot be funded, the resource module blocks the entire batch.
+> 6. **Prefer `allow_negative_balance=true` or switch to instant-payment mode when per-tx volume is unpredictable** — account mode with delayed txs is the easiest way to get stuck with a blocked queue.
+
 ```typescript
-// 1. Build the transaction locally
-const contractHex = tronWeb.address.toHex(contractAddress);
-const ownerHex = tronWeb.address.toHex(from);
+// 1. Estimate energy for THIS specific transaction — never reuse a cached or
+//    hardcoded value. Delayed mode quotes and reserves resources against this.
+const { energy_used } = await tronWeb.transactionBuilder.triggerConstantContract(
+  contractHex, 'transfer(address,uint256)', {},
+  [{ type: 'address', value: to }, { type: 'uint256', value: amount }],
+  ownerHex,
+);
+if (!energy_used || energy_used <= 0) {
+  throw new Error('Energy estimation failed — refuse to submit delayed tx without a real estimate');
+}
+const chainParams = await tronWeb.trx.getChainParameters();
+const energyFee = chainParams.find(p => p.key === 'getEnergyFee')?.value ?? 100;
+
+// Sanity cap: a normal TRC-20 transfer uses ~65k energy. Anything near 1M is a bug.
+const ENERGY_SANITY_MAX = 300_000;
+if (energy_used > ENERGY_SANITY_MAX) {
+  throw new Error(`Unexpected energy estimate ${energy_used} — refusing to submit oversized delayed tx`);
+}
+const feeLimit = Math.ceil(energy_used * energyFee * 1.2); // 20% headroom
+
+// 2. Build the transaction locally
 const localTx = await tronWeb.transactionBuilder._triggerSmartContractLocal(
   contractHex, 'transfer(address,uint256)',
   { feeLimit, callValue: 0, txLocal: true },
@@ -357,29 +393,39 @@ const localTx = await tronWeb.transactionBuilder._triggerSmartContractLocal(
   ownerHex,
 );
 
-// 2. Solidified block + bump expiration (1-12 hours) — single call
+// 3. Solidified block + bump expiration (1-12 hours) — single call
 const prepared = await prepareTransaction(tronWeb, localTx.transaction, {
   expirationSeconds: 14400, // 4 hours
 });
 
-// 3. Sign with 4 args: (tx, privateKey, false, false)
+// 4. Sign with 4 args: (tx, privateKey, false, false)
 const signed = await tronWeb.trx.sign(prepared, privateKey, false, false);
 
-// 4. Broadcast — does not wait for on-chain confirmation
-const result = await tronWeb.trx.sendRawTransaction(signed);
-
-// 5. Force immediate processing if needed (wait ~10s for queue)
-await fetch('https://api.transatron.io/api/v1/pendingtxs/flush', {
-  method: 'POST',
-  headers: { 'TRANSATRON-API-KEY': spenderKey },
-});
-
-// 6. Check pending transactions
+// 5. De-duplicate: never broadcast if a prior tx for this target is still PENDING
 const pending = await fetch(
   `https://api.transatron.io/api/v1/pendingtxs?address=${from}`,
   { headers: { 'TRANSATRON-API-KEY': spenderKey } }
 ).then(r => r.json());
+const alreadyQueued = pending.transactions?.some(
+  (t: any) => t.status === 'PENDING' && t.target === to, // match by target or by idempotency key
+);
+if (alreadyQueued) {
+  return; // do NOT re-broadcast — a duplicate would multiply the required balance
+}
+
+// 6. Broadcast — does not wait for on-chain confirmation
+const result = await tronWeb.trx.sendRawTransaction(signed);
+
+// 7. Force immediate processing if needed (wait ~10s for queue)
+await fetch('https://api.transatron.io/api/v1/pendingtxs/flush', {
+  method: 'POST',
+  headers: { 'TRANSATRON-API-KEY': spenderKey },
+});
 ```
+
+**Never run a retry loop that rebroadcasts the same delayed tx on a timer.** If a delayed tx appears stuck, first inspect `GET /api/v1/pendingtxs` — it is almost certainly already PENDING. Rebroadcasting appends a new queued entry; it does not replace the old one. The backlog then multiplies the required balance until the resource module blocks the entire batch with `Not enough balance to process transactions`.
+
+**Diagnosing stuck batches.** If you see the resource module reject a delayed batch for insufficient balance, compare `Σ quoted fee across PENDING txs` against `balance_rtrx`. If the quoted fees look far higher than real consumption (e.g. 38 TRX quoted per simple USDT transfer), the root cause is an oversized `fee_limit`, not insufficient funding — fix estimation first, then clear stale PENDINGs via support so they don't all fire once the account is topped up.
 
 ## Critical Gotchas
 
@@ -422,7 +468,11 @@ Transatron automatically batches consecutive submissions (3→5→20→50 transa
 
 ### fee_limit Determines Delegation
 
-Transatron uses `fee_limit` to decide how much energy to delegate. A hardcoded or oversized `fee_limit` causes excessive delegation and wasted resources. Always estimate energy via `triggerconstantcontract` and calculate `fee_limit` from chain parameters.
+Transatron uses `fee_limit` to decide how much energy to delegate and — critically — how much to quote/reserve against the account balance. A hardcoded or oversized `fee_limit` causes excessive delegation, inflated per-tx pricing, and (in account + delayed mode) blocked batches when the quoted reservation exceeds the available TFN/TFU balance.
+
+**Always estimate energy per transaction.** Call `triggerConstantContract` for each tx and compute `feeLimit = Math.ceil(energy_used * energyFee * 1.2)` from `getChainParameters`. Never reuse a cached estimate across different recipients or token amounts. Never ship a flat default like `feeLimit: 1_000_000`.
+
+**Real-world impact example.** A flat `feeLimit` of 1,000,000 energy on a simple TRC-20 transfer that actually consumes ~65k energy gets quoted as a bulk order against the full requested amount. At an energy price of 38 SUN/unit plus ~345 bytes of bandwidth at 1,000 SUN/byte, the quote is ~38 TRX per tx — roughly 15× the real ~2.4 TRX cost. Paired with account-payment mode and delayed transactions, the inflated quotes stack across every PENDING tx and quickly exhaust the TFN balance. Accurate estimation is the only fix; increasing the balance just delays the same failure.
 
 ### Diagnosing Missing Transaction Hashes
 
@@ -642,8 +692,9 @@ When writing Transatron integration code:
 10. For programmatic onboarding, use `POST /api/v1/register` with a signed (unbroadcasted) deposit tx
 11. Store registration credentials immediately — they are only returned once
 12. Never submit the same transaction to both Transatron and another node
-13. Size `fee_limit` accurately — Transatron uses it to determine delegation amount
+13. Size `fee_limit` accurately per tx (estimate + 20% headroom, with a sanity cap) — Transatron uses it to quote and delegate. Never hardcode.
 14. Check `transatron.code` in broadcast responses when transactions don't appear on-chain
+15. **For delayed transactions:** estimate energy per tx, de-duplicate against `/api/v1/pendingtxs` before broadcasting, and never run retry loops that rebroadcast the same payload on a timer — duplicates multiply the balance required to clear the batch
 
 ## Reference Examples
 
