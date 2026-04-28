@@ -1,6 +1,6 @@
 # Awesome TRON Agents for Claude Code
 
-Specialized Claude Code agents for TRON blockchain development — architecture guidance, TronWeb SDK patterns, Transatron fee optimization, shielded transactions, and USDT0 cross-chain bridging.
+Specialized Claude Code agents for TRON blockchain development — architecture guidance, TronWeb SDK patterns, Transatron fee optimization, shielded transactions, USDT0 cross-chain bridging, and Privy embedded wallet integration.
 
 ## Agents
 
@@ -8,6 +8,7 @@ Specialized Claude Code agents for TRON blockchain development — architecture 
 
 - [**tron-architect**](agents/tron-architect.md) — TRON platform architecture: resource model, energy/bandwidth economics, fee optimization strategy, smart contract lifecycle planning.
 - [**transatron-architect**](agents/transatron-architect.md) — Transatron (Transfer Edge) solutions architecture: integration pattern selection, payment mode decisions, call_value top-up, business trade-offs.
+- [**transatron-architect-privy**](agents/transatron-architect-privy.md) — Privy + Transatron architecture: choosing a Privy signing surface, picking a Transatron payment mode under Privy constraints, designing the webhook/batch boundary.
 
 ### Implementation (writes code)
 
@@ -15,6 +16,7 @@ Specialized Claude Code agents for TRON blockchain development — architecture 
 - [**tron-integrator-trc20**](agents/tron-integrator-trc20.md) — TRC-20 tokens: transfer, approve, transferFrom with energy estimation, USDT dynamic penalty handling, operation-specific fallbacks.
 - [**tron-integrator-sunswap**](agents/tron-integrator-sunswap.md) — SunSwap DEX swaps: Smart Exchange Router integration, swap path encoding, TRC-20 approve before swaps, energy estimation for swaps.
 - [**transatron-integrator**](agents/transatron-integrator.md) — Transatron implementation: fee payment modes (account, instant, coupon, delayed), balance replenishment, programmatic registration.
+- [**transatron-integrator-privy**](agents/transatron-integrator-privy.md) — Privy + Transatron implementation: wiring authorization-signature / multi-payload Privy signing to Transatron broadcast, handling Privy webhooks for Tron resource-delegation ops, defensive client wrappers.
 - [**tron-integrator-shieldedusdt**](agents/tron-integrator-shieldedusdt.md) — Shielded TRC-20 privacy: zk-SNARK proof generation, mint/transfer/burn flows, note scanning.
 - [**tron-integrator-usdt0**](agents/tron-integrator-usdt0.md) — USDT0 (LayerZero OFT) cross-chain transfers: quoting fees, building send transactions, call_value handling for bridging to Ethereum/Solana/TON.
 
@@ -30,6 +32,15 @@ Add the marketplace, then install the plugin:
 ```
 
 Claude Code clones the repo, registers the catalog from `.claude-plugin/marketplace.json`, and copies the agents into its plugin cache.
+
+> **Privy pack:** This branch (`feature/privy`) ships the Privy-enabled variant (`1.0.5-privy`). To install from this branch specifically, point the marketplace source at it:
+>
+> ```bash
+> git clone -b feature/privy https://github.com/transatron/awesome-tron-agents.git
+> # then in Claude Code:
+> /plugin marketplace add ./awesome-tron-agents
+> /plugin install awesome-tron-agents
+> ```
 
 ### Interactive Installer
 
@@ -96,7 +107,9 @@ Once installed, Claude Code automatically routes TRON-related questions to the a
 /agents tron-integrator-trc20
 /agents tron-integrator-sunswap
 /agents transatron-architect
+/agents transatron-architect-privy
 /agents transatron-integrator
+/agents transatron-integrator-privy
 /agents tron-integrator-shieldedusdt
 /agents tron-integrator-usdt0
 ```
