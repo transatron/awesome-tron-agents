@@ -504,6 +504,10 @@ When energy estimation fails or returns 0, use operation-specific fallbacks. See
 
 Custom energy price is set on the non-spender key via the Transatron dashboard. The spread between the custom price charged to users and Transatron's rate is credited as cashback. Runnable example: [`non-custodial-cashback.ts`](https://github.com/transatron/examples_tronweb/blob/main/src/examples/non-custodial-cashback.ts)
 
+### Multisig Transactions
+
+Multi-signature transactions need **no special handling** on the Transatron side. Build the transaction against the correct permission id, collect the required signatures with `tronWeb.trx.multiSign` (see `tron-developer-tronweb`), and broadcast the combined transaction through Transatron exactly like any single-signed tx. Transatron covers the per-transaction **MultiSignFee** that the node burns for multi-signed transactions (a dynamic chain parameter, currently 1 TRX, read live — never hardcoded) by pre-funding the owner address, so the sender's own TRX is never spent on it. The covered fee is folded into the `tx_fee_burn_trx` comparison value returned in the `transatron` object — there is no separate field to read. Runnable example: [`send-trx-multisig.ts`](https://github.com/transatron/examples_tronweb/blob/main/src/examples/sending_tx/send-trx-multisig.ts).
+
 ## Transatron Extended API
 
 All endpoints are on the Transatron `fullHost` base URL.
@@ -528,7 +532,7 @@ Key Transatron response fields to type when writing integration code:
   - `tx_fee_rusdt_instant` — instant payment fee in USDT (micro-USDT). Use for instant USDT payment mode.
   - `tx_fee_rtrx_account` — account payment fee in TFN (SUN). Auto-deducted on broadcast with spender key.
   - `tx_fee_rusdt_account` — account payment fee in TFU (micro-USDT).
-  - `tx_fee_burn_trx` — what regular Tron would burn (SUN). Use for cost comparison display.
+  - `tx_fee_burn_trx` — what regular Tron would burn (SUN), including the per-tx MultiSignFee for multi-signed transactions. Stays a reference/comparison value (see the delayed-tx dry-run check above). Use for cost comparison display.
   - `energy_needed` — energy units the transaction requires
   - `message` — hex-encoded status message (decode with `hexToUnicode()`)
   - `code` — status code (check for errors)

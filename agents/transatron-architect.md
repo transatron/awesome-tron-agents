@@ -182,6 +182,7 @@ API registration creates an account in a single API call — ideal for automatio
 - **Batching:** Automatic (3→5→20→50 txs). Transparent to the caller.
 - **Over-delegation:** Caused by hardcoded/oversized `fee_limit`. Always estimate via `triggerconstantcontract`.
 - **Balance errors with funds:** Likely using non-spender key — switch to spender key for account payment mode.
+- **Multisig support:** Multi-signature accounts work transparently — build and multi-sign the transaction as usual (across owner/active permissions), then broadcast through Transatron. Transatron **automatically covers the per-tx MultiSignFee** (a dynamic chain parameter, currently 1 TRX, read live — not hardcoded) by pre-funding the owner address, so the customer's own TRX is never touched. The covered amount is reflected in the `transatron` response object alongside the energy/bandwidth coverage. See [the multisig FAQ](https://docs.transatron.io/faq#what-happens-when-i-send-a-multisig-transaction) for the user-facing explanation, `transatron-integrator` for the fields, and `tron-architect` for the permission model.
 
 ## Call Value Top-Up
 

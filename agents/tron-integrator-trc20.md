@@ -169,6 +169,7 @@ Current chain parameters (query `getchainparameters` for live values):
 | Task | Agent |
 |------|-------|
 | General TronWeb patterns (init, signing, broadcasting, wallets) | `tron-developer-tronweb` |
+| Multisig transactions (`Permission_id`, `multiSign`, combined broadcast) | `tron-developer-tronweb` |
 | TRON architecture, resource model, fee planning | `tron-architect` |
 | Transatron fee optimization architecture | `transatron-architect` |
 | Transatron implementation code | `transatron-integrator` |

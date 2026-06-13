@@ -1,6 +1,6 @@
 {
   "name": "awesome-tron-agents",
-  "version": "1.0.5-privy",
+  "version": "1.0.6-privy",
   "description": "Expert agents for TRON DApp development — TronWeb usage patterns, Transatron fee optimization, and Privy embedded wallet integration",
   "author": {
     "name": "Transatron",

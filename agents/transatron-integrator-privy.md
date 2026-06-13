@@ -375,6 +375,10 @@ Notes:
 - `energyFee` default above is `420` (the current TRON mainnet value at time of writing) rather than the deprecated `100`. Always prefer the live chain parameter.
 - The `Array.isArray(raw) ? raw : []` guard is a **hard requirement** anywhere you call `.find()` / `.filter()` / `.map()` on a Transatron list response.
 
+### Multisig transactions need no special wrapper handling
+
+A TRON multi-signature transaction (an account-permission threshold — distinct from a Privy multi-payload signature) requires **no special handling in the Transatron client wrapper**. Once the required key signatures are collected (via your Privy signing surface and `tronWeb.trx.multiSign` — see `tron-developer-tronweb`), broadcast the combined transaction through the same client method as any single-signed tx. Transatron covers the per-tx MultiSignFee (dynamic, currently 1 TRX) and reports it inside the `tx_fee_burn_trx` comparison value — see `transatron-integrator` for the exact fee fields.
+
 ## Selecting the Payment Mode at Broadcast Time
 
 A serious Privy + Transatron integration supports **both** instant and account mode, picking at runtime based on which balance is funded. They share most of the same client code; the only differences are (1) whether the frontend builds 1 or 2 transactions, (2) which keyed TronWeb instance the backend broadcasts through, and (3) which side has the top-up affordance.

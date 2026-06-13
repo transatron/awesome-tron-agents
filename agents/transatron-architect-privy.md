@@ -78,6 +78,10 @@ When a Privy wallet has an attached policy that must authorize *each* payload in
 - Every downstream consumer (controller DTO, batch executor, persistence layer) must accept both shapes.
 - If your batch routing tree branches on `typeof signature === 'string'` before dispatching to the TRON / Transatron path, the multi-payload case falls off the happy path — batches can end up terminally failed with a misleading "no signatures collected" error.
 
+### TRON multisig vs. Privy multi-payload
+
+Don't conflate the two. **Privy multi-payload** (above) is one signer authorizing several intents in a batch. **TRON multisig** is several keys jointly authorizing one transaction to satisfy an account-permission threshold (owner permission id 0, active permissions from id 2). Both are supported alongside Transatron: collect the required key signatures via the chosen Privy signing surface, then broadcast the single combined transaction through Transatron. Transatron **automatically covers the per-tx MultiSignFee** (a dynamic chain parameter, currently 1 TRX) by pre-funding the owner — the user's wallet never needs TRX for it. See `tron-architect` for the permission model and `transatron-integrator` for the covered-fee field.
+
 ## Transatron Payment Modes Under a Privy Wallet
 
 The Transatron primer (see `transatron-architect`) covers the four modes in general. Here is how each interacts with a Privy signer specifically.
