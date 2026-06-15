@@ -33,15 +33,6 @@ Add the marketplace, then install the plugin:
 
 Claude Code clones the repo, registers the catalog from `.claude-plugin/marketplace.json`, and copies the agents into its plugin cache.
 
-> **Privy pack:** This branch (`feature/privy`) ships the Privy-enabled variant (`1.0.5-privy`). To install from this branch specifically, point the marketplace source at it:
->
-> ```bash
-> git clone -b feature/privy https://github.com/transatron/awesome-tron-agents.git
-> # then in Claude Code:
-> /plugin marketplace add ./awesome-tron-agents
-> /plugin install awesome-tron-agents
-> ```
-
 ### Interactive Installer
 
 Clone the repo and run the installer to pick agents and installation scope (global/local):
