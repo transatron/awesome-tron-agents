@@ -92,6 +92,38 @@ For TRC-20 specific operations (transfer, approve, transferFrom, balance queries
 
 Chain parameters change via governance. Hardcoding them produces silent failures after parameter updates.
 
+## Multisig Transactions
+
+TRON accounts can require multiple signatures natively via the permission system (see `tron-architect` for the owner/active permission model and the per-tx MultiSignFee). To sign and broadcast a multisig transaction, build it against the correct **permission id**, collect a signature from each signer with `tronWeb.trx.multiSign`, then broadcast the single combined transaction once the accumulated signature weight meets the permission's threshold.
+
+```typescript
+// Permission_id: 0 = owner permission, 2 = first active permission
+const PERMISSION_ID = 2;
+
+// 1. Build the transaction with the permission id it will be signed against
+const tx = await tronWeb.transactionBuilder.sendTrx(
+  recipientAddress,
+  amountInSun,
+  ownerAddress,
+  { permissionId: PERMISSION_ID },
+);
+
+// 2. Each signer multi-signs the SAME transaction in turn. multiSign accumulates
+//    signatures onto one combined tx — never sign separate copies and broadcast each.
+let signed = await tronWeb.trx.multiSign(tx, signerKeyA, PERMISSION_ID);
+signed = await tronWeb.trx.multiSign(signed, signerKeyB, PERMISSION_ID);
+// ...repeat until the summed key weights reach the threshold (≥ 2 signatures for 2-of-N).
+
+// 3. Broadcast the single combined transaction — NOT once per signer.
+const result = await tronWeb.trx.sendRawTransaction(signed);
+```
+
+**Do not confuse `multiSign` with the 4-argument `sign`.** The form `tronWeb.trx.sign(tx, privateKey, false, false)` seen in delayed-transaction flows explicitly **disables** multisig — the trailing `false` arguments tell TronWeb not to treat the result as part of a multi-signature set, so it returns a plain single-signed transaction and ignores permission thresholds. Use `tronWeb.trx.multiSign(tx, key, permissionId)` whenever a permission threshold above 1 must be satisfied.
+
+Runnable example: [`send-trx-multisig.ts`](https://github.com/transatron/examples_tronweb/blob/main/src/examples/sending_tx/send-trx-multisig.ts).
+
+If the multi-signed account should not need to hold TRX for the MultiSignFee, broadcasting through Transatron covers it automatically — see `transatron-integrator`.
+
 ## Token Amount Rounding Rule
 
 When converting human-readable amounts to on-chain integers (SUN, or token smallest units via `10^decimals`), always use `Math.floor`. Never `Math.round` or `Math.ceil` — rounding up can produce an amount exceeding the actual balance, causing a revert.

@@ -238,6 +238,20 @@ Architecture constraint: When building systems that interact with USDT, always e
 
 Transatron insulates applications from dynamic energy multiplier volatility by providing energy at predictable per-transaction rates. For USDT-heavy workloads, this removes the need to manage staking positions sized for worst-case dynamic penalties. Delegate to `transatron-architect` for evaluation.
 
+## Multisig & Account Permissions
+
+TRON accounts support native multi-signature through a built-in permission system — no smart-contract wallet required. Each account has an **owner permission** (full control, including the ability to change permissions) and may define one or more **active permissions** (scoped to specific operations). Every permission carries a set of weighted keys and a numeric **threshold**: a transaction is valid only once the combined weight of the signatures it collects meets or exceeds that threshold.
+
+- **Owner permission** is addressed as `Permission_id` 0. **Active permissions** begin at `Permission_id` 2.
+- Each key in a permission has a weight; the permission's threshold defines how much signing weight a transaction needs. A "2-of-3" wallet assigns weight 1 to three keys with a threshold of 2 — so **at least two signatures** are required to authorize a transaction.
+- This is the standard pattern for treasury wallets, exchange hot/cold separation, and any account where no single key should be able to move funds alone.
+
+**When and why:** shared custody, approval workflows, and key-compromise resilience — losing one key does not compromise the account as long as the remaining weight cannot reach the threshold.
+
+**The MultiSignFee.** TRON charges a per-transaction fee for any transaction carrying more than one signature. It is a dynamic chain parameter (`getMultiSignFee`, currently 1 TRX) — query it live, never hardcode it. The fee is **in addition to** the normal energy and bandwidth costs and is burned by the node when the multi-signed transaction is processed. It applies across multi-signed contract types, including TransferContract, TriggerSmartContract, and CreateSmartContract.
+
+For the TronWeb implementation — building against the correct `Permission_id`, accumulating signatures with `multiSign`, and broadcasting the single combined transaction once the threshold is met — delegate to `tron-developer-tronweb`. When the account should not need to hold TRX for the MultiSignFee, `transatron-architect` covers how Transatron absorbs that fee automatically.
+
 ## Privacy Features
 
 TRON supports shielded TRC-20 transactions using zk-SNARKs, enabling transfers where the sender, recipient, and amount are hidden on-chain. Shielded operations include mint (transparent → shielded), transfer (shielded → shielded), and burn (shielded → transparent).
