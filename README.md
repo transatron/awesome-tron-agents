@@ -23,6 +23,7 @@ Specialized Claude Code agents for TRON blockchain development — architecture 
 ## Installation
 
 ### As Claude Code Plugin (Recommended)
+- [Continuum-AI-Corp/OrcaReplay](https://github.com/Continuum-AI-Corp/OrcaReplay) — integrates as a recorder/inspector alongside your agent stack.
 
 Add the marketplace, then install the plugin:
 
