@@ -1,0 +1,6 @@
+{"tools":[
+{"name":"tx_lookup","description":"Look up one or more TRON transactions by full hash: sender, receiver, type, result, fee, block. Returns the evidence envelope.","inputSchema":{"type":"object","properties":{"tx_hash":{"type":"string","description":"Full 64-hex transaction hash."}},"required":["tx_hash"]}},
+{"name":"explain_sql","description":"Check a SQL statement's partitions and estimated cost against the plan limits. Never runs it. Use before run_sql.","inputSchema":{"type":"object","properties":{"sql":{"type":"string","description":"One read-only SELECT with literal block_number bounds."}},"required":["sql"]}},
+{"name":"run_sql","description":"Run one read-only SQL statement on the TRON warehouse with guard-rails. Bound block_number with literals and run explain_sql first.","inputSchema":{"type":"object","properties":{"sql":{"type":"string","description":"One read-only SELECT with literal block_number bounds."}},"required":["sql"]}},
+{"name":"search_docs","description":"Search the TRON warehouse documentation: tables, traps, protocols, recipes, limits.","inputSchema":{"type":"object","properties":{"query":{"type":"string","description":"Words or a table name."}},"required":["query"]}}
+]}

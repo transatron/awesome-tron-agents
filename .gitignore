@@ -1,4 +1,15 @@
+.*
+!.gitignore
+!.claude-plugin/
+!.claude-plugin/marketplace.json
+!.agents/
+!.agents/plugins/marketplace.json
+!agents/.claude-plugin/
+!agents/.claude-plugin/plugin.json
+!blu/.claude-plugin/
+!blu/.claude-plugin/plugin.json
+!blu/.codex-plugin/
+!blu/.codex-plugin/plugin.json
+!blu/.mcp.json
 local
-.claude
-.mcp.json
 plans/

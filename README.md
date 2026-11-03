@@ -20,6 +20,14 @@ Specialized Claude Code agents for TRON blockchain development — architecture 
 - [**tron-integrator-shieldedusdt**](agents/tron-integrator-shieldedusdt.md) — Shielded TRC-20 privacy: zk-SNARK proof generation, mint/transfer/burn flows, note scanning.
 - [**tron-integrator-usdt0**](agents/tron-integrator-usdt0.md) — USDT0 (LayerZero OFT) cross-chain transfers: quoting fees, building send transactions, call_value handling for bridging to Ethereum/Solana/TON.
 
+<!-- D9 text: pending operator ratification -->
+### BLU
+
+Investigate TRON from your agent: addresses, flows, counterparties, energy and contract calls across the full chain history,
+answered with the SQL, block height and transaction hashes behind each result. Install:
+`/plugin marketplace add transatron/awesome-tron-agents` · `/plugin install blu@transatron-tron-agents` · sign in through `/mcp`.
+The plugin adds six skills, three agents (investigator, flow tracer, SQL analyst) and two commands (`/blu:investigate`, `/blu:exposure`).
+
 ## Installation
 
 ### As Claude Code Plugin (Recommended)

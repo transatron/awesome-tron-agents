@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "tron": {
+      "type": "http",
+      "url": "https://blu.transatron.io/mcp/s/plugin"
+    }
+  }
+}

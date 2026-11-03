@@ -1,0 +1,10 @@
+{
+  "name": "blu",
+  "version": "0.1.12",
+  "description": "BLU: the complete history of TRON for investigators and their agents, with the SQL, block height and transaction hashes behind every answer. Sign in once; no key needed.",
+  "author": {
+    "name": "Transatron"
+  },
+  "homepage": "https://blu.transatron.io",
+  "license": "MIT"
+}
