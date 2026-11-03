@@ -1,0 +1,20 @@
+{
+  "name": "transatron-tron-agents",
+  "interface": {
+    "displayName": "Transatron TRON agents"
+  },
+  "plugins": [
+    {
+      "name": "blu",
+      "source": {
+        "source": "local",
+        "path": "./blu"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Research"
+    }
+  ]
+}
