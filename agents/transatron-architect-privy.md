@@ -127,7 +127,7 @@ The Transatron primer (see `transatron-architect`) covers the four modes in gene
 - Recommended for: consumer DApps where the user is willing to hold a small TRX float, "gasless" UX where the user signs once via Privy and the fee tx is invisible.
 - Pre-flight gate: at least **> 5 TRX** on the *user's* Privy wallet to fund the fee deposit. See "Pre-flight Balance Gates per Mode."
 - Beware:
-  - Transatron requires the fee tx and the main tx to arrive back-to-back, with no verification in between. If your Privy UX inserts a confirmation modal, a cross-tab round-trip, or a `getTransactionInfo` poll between signing and broadcasting, you will break the batch.
+  - Transatron requires the fee tx and the main tx to arrive back-to-back, with no verification in between. If your Privy UX inserts a confirmation modal, a cross-tab round-trip, or a `getTransactionInfo` poll between signing and broadcasting, you will break the pair. An instant payment is never part of a bulk.
   - "Insufficient TRX" is a **user** problem — show them their own wallet's TRON address and a top-up hint.
   - The user pays exactly the instant payment and does not need the final fee (rule 4). If the fee tx's outcome is unknown, do not ask Privy to sign a second fee tx: the first may still land.
 

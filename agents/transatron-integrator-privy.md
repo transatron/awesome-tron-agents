@@ -581,24 +581,35 @@ Frontend just signs the main tx and POSTs it — no fee tx, no `/deposit-address
 // backend /broadcast — instant mode (or unify by adding a `mode` param)
 async function instantBroadcast(feeTx: any, mainTx: any) {
   const feeReply = (await transatronTron.trx.sendRawTransaction(feeTx)) as unknown as TransatronBroadcastResult;
-  const fee = classifyBroadcast(feeReply);
-  if (fee.kind === 'rejected' || fee.kind === 'request_error') {
-    throw broadcastError('fee', feeReply);        // definitive: safe to rebuild and re-sign both
+  const fee = classifyBroadcast(feeReply);       // reads the reply in hand; no network call
+  switch (fee.kind) {
+    case 'accepted':
+      break;                                      // the only outcome that sends the pair's main tx
+    case 'rejected':
+    case 'request_error':
+    case 'underpriced':
+    case 'not_broadcast_rebuild':                 // not expected: an instant payment is never part of a bulk
+      throw broadcastError('fee', feeReply);      // definitive, not broadcast: rebuild both, new signatures
+    case 'unknown':
+    case 'duplicate':
+    case 'pending':
+      // The payment is out or may still land. Never ask Privy to sign a second payment for this send.
+      // Poll feeReply.txid (until fee.pollUntil when present), then decide.
+      throw broadcastError('fee_outcome_unknown', feeReply);
+    default: {
+      const unhandled: never = fee;
+      throw new Error(`Unhandled fee outcome ${JSON.stringify(unhandled)}`);
+    }
   }
-  if (fee.kind === 'unknown') {
-    // The payment may still land. Never ask Privy to sign a second payment for this send.
-    // Poll feeReply.txid until fee.pollUntil, then decide.
-    throw broadcastError('fee_outcome_unknown', feeReply);
-  }
-  // No verification, no polling — Transatron requires back-to-back arrival.
+  // No verification, no polling — Transatron requires the pair to arrive back-to-back.
   const mainReply = (await transatronTron.trx.sendRawTransaction(mainTx)) as unknown as TransatronBroadcastResult;
   const main = classifyBroadcast(mainReply);
-  // main 'unknown' → poll mainReply.txid; do not re-sign. 'underpriced' → re-quote, new payment, try again.
+  // main 'unknown' | 'duplicate' → poll mainReply.txid; do not re-sign. 'underpriced' → re-quote, new payment, try again.
   return { feeTxid: feeReply.txid, mainTxid: mainReply.txid, fee, main, orderId: mainReply.transatron?.order_id };
 }
 ```
 
-The frontend must treat `fee_outcome_unknown` and a `main.kind` of `unknown` as "do not retry with a new signature". Show "pending" and poll the txid. The account-mode `not_broadcast_rebuild_and_sign` error is the opposite: nothing was broadcast, so the frontend rebuilds the transaction and asks the user to sign it again. The user pays exactly the instant payment; there is no final fee to show them (rule 4).
+The fee transaction and the main transaction are a pair, never a bulk: only an `accepted` fee reply sends the main transaction. The frontend must treat `fee_outcome_unknown` and a `main.kind` of `unknown` as "do not retry with a new signature". Show "pending" and poll the txid. The account-mode `not_broadcast_rebuild_and_sign` error is the opposite: nothing was broadcast, so the frontend rebuilds the transaction and asks the user to sign it again. The user pays exactly the instant payment; there is no final fee to show them (rule 4).
 
 Frontend in instant mode also calls `/deposit-address` and `/fee-quote`, builds the fee tx as `transactionBuilder.sendTrx(depositAddress, quote.feeRtrxInstant, fromBase58)`, prepares it with the same `prepareTransaction` helper, and signs both transactions through Privy before POSTing both signed payloads.
 

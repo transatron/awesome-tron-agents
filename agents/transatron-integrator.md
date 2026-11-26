@@ -503,9 +503,9 @@ const signedMainTx = await tronWeb.trx.sign(preparedMainTx);
 const result = await tronWeb.trx.sendRawTransaction(signedMainTx);
 ```
 
-**Critical: Do NOT check the fee deposit result before broadcasting the main transaction.** Transatron processes instant payment deposits and main transactions as a batch — both must arrive back-to-back. Inserting any verification, polling, or `await getTransactionInfo()` between the two broadcasts breaks the batch and causes Transatron to process them independently, which means the main transaction loses its energy sponsorship. Send both `sendRawTransaction` calls sequentially with no checks in between. Verify the final result only after the main transaction broadcast returns.
+**Critical: Do NOT check the fee deposit result before broadcasting the main transaction.** Transatron processes an instant payment and its main transaction as a pair — both must arrive back-to-back. Inserting any verification, polling, or `await getTransactionInfo()` between the two broadcasts breaks the pair and causes Transatron to process them independently, which means the main transaction loses its energy sponsorship. Send both `sendRawTransaction` calls sequentially with no checks in between. Verify the final result only after the main transaction broadcast returns. An instant payment is never part of a bulk, so the bulk charge failure rule ([Step 1](#step-1--classify-the-outcome-this-decides-whether-anything-may-be-rebuilt), rule 8) does not apply to it.
 
-**Critical: Both fee and main transactions must use solidified block references.** Use `prepareTransaction()` (see `tron-developer-tronweb`) on both transactions before signing. Without this, micro-forks can cause TAPOS_ERROR and break the back-to-back broadcast batch.
+**Critical: Both fee and main transactions must use solidified block references.** Use `prepareTransaction()` (see `tron-developer-tronweb`) on both transactions before signing. Without this, micro-forks can cause TAPOS_ERROR and break the back-to-back pair.
 
 7% pricing tolerance between estimate and broadcast. If the fee drifts beyond 7%, Transatron returns an `INSTANT_PAYMENT_UNDERPRICED` error and does not broadcast — resubmit the simulation via `fullNode.request()` for an updated quote. TRX fee payment is cheaper than USDT.
 
@@ -513,7 +513,7 @@ const result = await tronWeb.trx.sendRawTransaction(signedMainTx);
 
 **Final fee on an instant-payment (Non-Spender) client.** The end user does not need it. They pay exactly the instant payment amount, and settlement never refunds or charges them more. The difference (payment − final fee) is settled with the API key owner as cashback, which can be **negative** (the owner's balance is debited). The owner reads it with the **Spender** key in `GET /api/v1/orders` (`cashback_amount_trx`), on the server. If the payment does not land, nothing is charged. Do not add an `/orders` call to the Non-Spender client (it gets `401`); the reply's `order_id` is for the end user to quote to the business.
 
-If the user has insufficient USDT for an instant payment, both the payment and primary transactions are batched and Transatron returns a `NOT_ENOUGH_FUNDS` error without broadcasting either transaction.
+If the user has insufficient USDT for an instant payment, Transatron handles the payment and the main transaction as a pair and returns a `NOT_ENOUGH_FUNDS` error without broadcasting either transaction.
 
 ### 3. Coupon Payment
 

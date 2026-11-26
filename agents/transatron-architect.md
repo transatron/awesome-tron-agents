@@ -104,7 +104,7 @@ After initial account setup, use Transatron as the **only** RPC endpoint. Mainta
 **Key considerations:**
 - Uses non-spender API key (safe for client-side)
 - TRX fee payment is cheaper than USDT
-- Two transactions required per operation (fee + main) — they must be broadcast back-to-back with no verification in between, because Transatron processes them as a batch
+- Two transactions required per operation (fee + main) — they must be broadcast back-to-back with no verification in between, because Transatron processes them as a pair. An instant payment is never part of a bulk
 
 ### Pattern 3: Non-Custody with Coupons (Platforms, Loyalty Programs)
 
