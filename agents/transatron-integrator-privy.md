@@ -527,7 +527,7 @@ export const transatronTron = new TronWeb({
   eventServer:  httpProvider(env.TRANSATRON_API_URL, nonSpenderHeaders),
 });
 
-// Account-mode broadcast surface (Transatron deducts from TFN/TFU on broadcast).
+// Account-mode broadcast surface (Transatron charges TFN/TFU when the order settles).
 // Spender key on ALL THREE providers — silently falls back to non-spender behaviour
 // if you only set it on, say, eventServer.
 export const transatronTronSpender = new TronWeb({
