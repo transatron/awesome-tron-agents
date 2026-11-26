@@ -422,7 +422,8 @@ A low account shows as `transatron.code` `LIMIT_EXCEED` or `NOT_ENOUGH_FUNDS`. T
 
 1. `transatron.is_final === true` → the reply's `tx_fee_*` figures are final: book them.
 2. Otherwise they are an estimate. Read `GET /api/v1/orders?order_id=<transatron.order_id>`, or `?search=<txid>` once the transaction has landed.
-3. Order `is_final` `true` or `null` → final: book `amount_trx` (sun), or the transaction's `order_transactions` entry for a shared bulk order. `false` → still settling (cashback shows `0`): query again later. Settlement typically completes within about 10 seconds of landing; it takes longer with many transfers in flight or after a service interruption.
+3. Order `is_final` `true` or `null` → final: book `amount_trx` (sun), or the transaction's `order_transactions` entry for a shared bulk order. `false` → still settling (cashback shows `0`): query again later.
+   **Settlement timing:** charged when it settles, typically within about 10 seconds of the transfer landing on chain; an account with several transfers in flight at the same moment can see this take longer, up to a few minutes; after a service interruption it can take longer. The amount is the settled amount, charged once. ([release note](https://docs.transatron.io/release_notes/BroadcastReplyIsFinal))
 4. An empty `order_id` result right after the broadcast can mean the order is not recorded yet. A `search` `404` means the hash is not mined yet. Once landed, no order means nothing was charged.
 5. Key bookkeeping on `order_id`, never on tx hash.
 
@@ -553,6 +554,11 @@ const tcode = raw.transatron?.code;
 // LIMIT_EXCEED / NOT_ENOUGH_FUNDS: the Transatron account is too low and the tx was bypassed (operator top-up)
 const accountLow = tcode === 'LIMIT_EXCEED' || tcode === 'NOT_ENOUGH_FUNDS';
 
+if (outcome.kind === 'rebroadcast') {
+  // Bulk charge failure again: still not broadcast, nothing charged. Keep the SAME signed tx
+  // server-side and resend it later; do not ask the browser for a new signature.
+  return res.status(503).json({ error: 'not_broadcast_resend_later', outcome, txid: raw.txid });
+}
 if (outcome.kind === 'rejected' || outcome.kind === 'request_error') {
   // Definitive: the browser may build and sign a new transaction
   return res.status(accountLow ? 402 : 502).json({
@@ -725,7 +731,8 @@ private async executeTronBatch(intents: Intent[]) {
 
     let { reply, outcome } = await this.transatron.broadcast(signedTx);
     if (outcome.kind === 'rebroadcast') {
-      // Bulk charge failure, bypass off: resend the SAME signed tx (no new Privy signature)
+      // Bulk charge failure, bypass off: resend the SAME signed tx once (no new Privy signature).
+      // If it is 'rebroadcast' again, it is recorded as such: not broadcast, resend the same tx later.
       ({ reply, outcome } = await this.transatron.broadcast(signedTx));
     }
     // Record per intent: txid, order_id (shared across a bulk), outcome.
@@ -749,7 +756,7 @@ Lock-in rules for the batch executor:
 1. **Routing by chain runs first.** No shape-based filter may precede the chain-routing step.
 2. **Pre-exec validation lives outside the status-mutating try/catch.** A missing signature is a client error, not a terminal batch failure.
 3. **Per-intent errors don't kill the batch** unless the product explicitly wants all-or-nothing semantics; consider capturing per-intent status and a partial-success state.
-4. **A broadcast intent is never re-signed by a batch retry.** A retry re-runs only intents that were never broadcast, or whose outcome was `rejected` / `request_error`. An `unknown` intent (may still land, timeout, `SETTLEMENT_PENDING`) is polled until its expiration; then its order is checked. Book fees per `order_id` with `readCharge()` on the spender key.
+4. **A broadcast intent is never re-signed by a batch retry.** A retry re-runs only intents that were never broadcast (including a recorded `rebroadcast`, which resends the same signed tx), or whose outcome was `rejected` / `request_error` (rebuild and re-sign). An `unknown` intent (may still land, timeout, `SETTLEMENT_PENDING`) is polled until its expiration; then its order is checked. Book fees per `order_id` with `readCharge()` on the spender key.
 
 ## Privy Webhook — Guard Against Resource-Op Deposits
 
@@ -927,7 +934,7 @@ Use `useCreateWallet` and `useSignRawHash` from `@privy-io/react-auth/extended-c
 2. Initialize the Privy server client and the Transatron TronWeb client with explicit `providers.HttpProvider` header propagation.
 3. Accept both `privyAuthorizationSignature` (string) and `signaturePayload` (object with `signaturesByPayloadId`) in every signing DTO that can reach a policy-gated wallet.
 4. In the batch executor, route by chain BEFORE any shape-specific filter; keep pre-exec validation outside the status-mutating try/catch.
-5. Pick the payment mode per signing surface — server authorization signatures pair with account/delayed; client embedded-wallet signing pairs with instant/coupon.
+5. Pick the payment mode per signing surface, in the order account → instant → coupons. Server authorization signatures pair with account (plus delayed, if enabled on the key); client embedded-wallet signing pairs with account (backend broadcast with the spender key) or instant. Coupons only for a described coupon integration.
 6. Use `triggerConstantContract` + the live `getEnergyFee` chain parameter for `feeLimit`; never hardcode `100` or `420`.
 7. Read `GET /api/v1/orders` from its envelope (`raw.orders`, guarded with `Array.isArray`) using the spender key; never coerce the envelope itself.
 8. In the Privy webhook handler, short-circuit on `DelegateResourceContract`, `UnDelegateResourceContract`, `FreezeBalanceV2Contract`, `UnfreezeBalanceV2Contract` before the ledger / AML / notify pipeline.
