@@ -411,7 +411,7 @@ Apply in this order:
 4. **`transatron.code` `PENDING`:** a delayed transaction was buffered. No `order_id`, no `is_final`.
 5. **`INSTANT_PAYMENT_UNDERPRICED`:** the user transaction was **not broadcast**. Re-estimate, re-create the payment transaction, and try again.
 6. **`result: true` / `SUCCESS`:** accepted. Poll the txid.
-7. **`DUP_TRANSACTION_ERROR`:** treat it as accepted, and do not rebuild. The `transatron` object can be full, hold **only** `order_id`, or be absent, so never assume `transatron.code` exists.
+7. **`DUP_TRANSACTION_ERROR`:** Transatron or the network already has this transaction, and it is not processed again. This is not an "accepted" reply. Do not rebuild and do not ask Privy for a new signature. On the backend, read the outcome from Orders with the Spender key (by `transatron.order_id`, else by `?search=<txid>`) and poll the txid. One exception: if this transaction's earlier reply was a bulk charge failure with bypass off (rule 8), it was never broadcast, so rebuild it and collect a new signature. The `transatron` object can be full, hold **only** `order_id`, or be absent, so never assume `transatron.code` exists.
 8. **Bulk charge failure:** `transatron.code` `ERROR` + top-level `OTHER_ERROR`, with no may-still-land text. Nothing was charged and, with bypass off, nothing was broadcast. Build new transactions and ask for a **new user signature** (a new authorization signature on server-signed flows), then send them. **Never resend the same signed transaction:** it is answered `DUP_TRANSACTION_ERROR` and is not processed. Rebuild with new `raw_data` (fresh reference block and expiration via `prepareTransaction`); signing the stored `rawTx` again gives the same txid. With bypass on they went out without Transatron's resources, so the sender paid the network fee, and the top-level `code` is the node's result; never re-sign them. An instant payment is never part of a bulk, so this rule does not apply to it.
 9. **Other `OTHER_ERROR` / `NOT_ENOUGH_EFFECTIVE_CONNECTION`:** a request error, never broadcast. Fix the request.
 10. **Rejections** (`SIGERROR`, `TOO_BIG`, `CONTRACT_VALIDATE_ERROR`, `BANDWITH_ERROR`, `CONTRACT_EXE_ERROR`, `TRANSACTION_EXPIRATION_ERROR`, `TAPOS_ERROR`): final. Fix the cause; only now may Privy sign a rebuilt transaction.
@@ -458,7 +458,7 @@ interface TransatronOrder {
 }
 
 type BroadcastOutcome =
-  | { kind: 'accepted' } | { kind: 'unknown'; pollUntil?: string } | { kind: 'pending' }
+  | { kind: 'accepted' } | { kind: 'duplicate' } | { kind: 'unknown'; pollUntil?: string } | { kind: 'pending' }
   | { kind: 'underpriced' } | { kind: 'not_broadcast_rebuild' } | { kind: 'request_error' }
   | { kind: 'rejected'; code: string };
 
@@ -478,7 +478,7 @@ export function classifyBroadcast(r: TransatronBroadcastResult): BroadcastOutcom
   if (tt?.code === 'PENDING') return { kind: 'pending' };
   if (tt?.code === 'INSTANT_PAYMENT_UNDERPRICED') return { kind: 'underpriced' };
   if (r.result === true || r.code === 'SUCCESS') return { kind: 'accepted' };
-  if (r.code === 'DUP_TRANSACTION_ERROR') return { kind: 'accepted' };
+  if (r.code === 'DUP_TRANSACTION_ERROR') return { kind: 'duplicate' }; // not processed again: read Orders, poll
   if (r.code === 'OTHER_ERROR' && tt?.code === 'ERROR') return { kind: 'not_broadcast_rebuild' }; // new tx + new signature
   if (transportCode) return { kind: 'request_error' };
   return { kind: 'rejected', code: r.code ?? 'UNKNOWN' };
@@ -563,7 +563,8 @@ if (outcome.kind === 'rejected' || outcome.kind === 'request_error') {
     transatronMessage: decodeMessage(raw.transatron?.message),
   });
 }
-// accepted | unknown | pending: the tx is out (or may be). The browser must NOT re-sign.
+// accepted | duplicate | unknown | pending: the tx is out (or may be). The browser must NOT re-sign.
+// duplicate: not processed again; read the outcome with readCharge() and poll the txid.
 return res.json({
   txid: raw.txid,
   orderId: raw.transatron?.order_id ?? null,  // book later via readCharge() with the spender key
