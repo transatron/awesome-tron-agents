@@ -109,7 +109,7 @@ The Transatron primer (see `transatron-architect`) covers the four modes in gene
 
 ### Account mode (spender key — backend broadcast)
 
-- Backend holds a Transatron spender key; fees auto-deduct from a prepaid TFN/TFU balance on every broadcast.
+- Backend holds a Transatron spender key; fees are charged from a prepaid TFN/TFU balance when each order settles, shortly after the transaction lands (the reply carries an estimate unless `is_final` is `true`).
 - Compatible with **both server-side AND client-side Privy signing**. With a client-signed tx, the browser POSTs the signed payload to your backend, which broadcasts via a spender-keyed TronWeb instance. The spender key never leaves the server.
 - The transaction itself is identical to an instant-mode main tx — same builder, same `prepareTransaction`, same r||s||v signature shape. The *only* wire-level switch between instant and account is which keyed TronWeb instance broadcasts.
 - Recommended for: batch payouts, scheduled withdrawals, merchant sweeps, **and** consumer flows where the operator wants to fully sponsor users (no per-user TRX top-up needed).
