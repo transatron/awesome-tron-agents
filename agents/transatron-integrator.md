@@ -197,7 +197,8 @@ Apply in this order:
 2. If `is_final` is `false` or missing, the figures are an **estimate**. Never book them, and never tell the user they are the final charge. Read the charge from `GET /api/v1/orders` with a **Spender** key:
    1. by `?order_id=<uuid>` if the reply has `transatron.order_id`;
    2. otherwise by the transaction hash, `?search=<txid>`, once the transaction has landed.
-3. Read the order's `is_final`. `true` or `null` means the amounts are final: book `amount_trx` (in sun). `false` means the order is still settling; line values and cashback are provisional (cashback shows `0`), so query again later. Settlement typically completes within about 10 seconds of the transaction landing. With several transfers in flight at once it can take up to a few minutes, and longer after a service interruption.
+3. Read the order's `is_final`. `true` or `null` means the amounts are final: book `amount_trx` (in sun). `false` means the order is still settling; line values and cashback are provisional (cashback shows `0`), so query again later.
+   **Settlement timing:** charged when it settles, typically within about 10 seconds of the transfer landing on chain; an account with several transfers in flight at the same moment can see this take longer, up to a few minutes; after a service interruption it can take longer. The amount is the settled amount, charged once. ([release note](https://docs.transatron.io/release_notes/BroadcastReplyIsFinal))
 4. Handle the empty cases:
    - An `order_id` lookup that returns `200` with an empty `orders` list right after the broadcast can mean the order is not recorded yet. Query again.
    - A `search` that returns `404` means the hash is unknown or not mined yet.
@@ -383,29 +384,39 @@ const outcome = classifyBroadcast(reply);
 **Batch operations.** When you send several transactions, pace the sends and keep **every reply**. Each reply holds the outcome and the `order_id` you book against; transactions processed together as one bulk share one `order_id`. Do not block on each reply before the next send, and do not discard replies:
 
 ```typescript
-// 1. Send with fixed pacing; keep each reply (it carries the outcome and order_id)
-const sends: Promise<{ signedTx: Types.SignedTransaction; reply: TransatronBroadcastResult }>[] = [];
+// 1. Send with fixed pacing; keep each reply (it carries the outcome and order_id).
+//    A per-send catch keeps one thrown send from losing every other reply.
+type Sent = { signedTx: Types.SignedTransaction; reply?: TransatronBroadcastResult; error?: unknown };
+const send = (signedTx: Types.SignedTransaction): Promise<Sent> =>
+  tronWeb.trx
+    .sendRawTransaction(signedTx)
+    .then((reply) => ({ signedTx, reply: reply as unknown as TransatronBroadcastResult }))
+    .catch((error) => ({ signedTx, error })); // transport error: outcome unknown — poll, don't rebuild
+
+const sends: Promise<Sent>[] = [];
 for (const signedTx of signedTxs) {
-  sends.push(
-    tronWeb.trx
-      .sendRawTransaction(signedTx)
-      .then((reply) => ({ signedTx, reply: reply as unknown as TransatronBroadcastResult })),
-  );
+  sends.push(send(signedTx));
   await sleep(2000); // pacing between sends
 }
 const sent = await Promise.all(sends);
 
 // 2. Act on each outcome — there is no "retry everything that is not confirmed" step
-for (const { signedTx, reply } of sent) {
-  const outcome = classifyBroadcast(reply);
+for (let { signedTx, reply, error } of sent) {
+  if (!reply) { watch(signedTx.txID); continue; }       // no reply: treat as unknown
+  let outcome = classifyBroadcast(reply);
+  if (outcome.kind === 'rebroadcast') {
+    // Bulk charge failure, bypass off: nothing charged, not broadcast — resend the SAME signed tx once
+    ({ reply, error } = await send(signedTx));
+    if (!reply) { watch(signedTx.txID); continue; }
+    outcome = classifyBroadcast(reply);                 // the resend's reply replaces the first
+  }
+  record(signedTx.txID, reply, outcome);                // keep txid, order_id, outcome for booking
   switch (outcome.kind) {
     case 'accepted':
     case 'unknown':        // poll the txid (until outcome.pollUntil); never rebuild or re-sign
       watch(signedTx.txID, outcome.kind === 'unknown' ? outcome.pollUntil : undefined);
       break;
-    case 'rebroadcast':    // bulk charge failure, bypass off: nothing charged, not broadcast
-      await tronWeb.trx.sendRawTransaction(signedTx); // the SAME signed tx — not a rebuild
-      break;
+    case 'rebroadcast':    // failed twice: stop and surface it; still never re-sign
     case 'rejected':       // final: fix the cause, then rebuild this one transaction
     case 'request_error':  // never broadcast: fix the request
       reportFailure(signedTx.txID, outcome);
@@ -416,7 +427,7 @@ for (const { signedTx, reply } of sent) {
 // 3. After each watched txid lands, book its fee per order_id with readCharge(spenderKey, reply, true)
 ```
 
-`watch` polls as in [Broadcast Polling](#broadcast-polling). `reportFailure` is your error path. Read `transatron.code` on each reply, not only the top-level `code`.
+`watch` polls as in [Broadcast Polling](#broadcast-polling). `record` persists the reply per transaction. `reportFailure` is your error path. Read `transatron.code` on each reply, not only the top-level `code`.
 
 When balance reaches 0, bypass setting determines behavior: burn TRX from sender or return error. See [Balance Replenishment](#balance-replenishment).
 
@@ -577,11 +588,18 @@ Docs: [About Delayed Transactions](https://docs.transatron.io/transatron_node_ap
 > 1. **Estimate every transaction individually.** Call `triggerConstantContract` (or `wallet/estimateenergy`) immediately before each delayed tx and set `feeLimit = Math.ceil(energy_used * energyFee * 1.2)`. No flat defaults. No shared estimates across recipients.
 > 2. **Enforce a hard ceiling on `feeLimit`.** Reject or fall back to safe values if estimation returns an unexpectedly large number. A typical TRC-20 transfer is ~65k energy — anything approaching 1M is a bug.
 > 3. **Dry-run the quoted fee.** Simulate via `fullNode.request('wallet/triggersmartcontract', ...)` and inspect `transatron.tx_fee_rtrx_account`. If the quote is far above the regular-Tron reference (`tx_fee_burn_trx`), you are over-sizing `feeLimit` — fix estimation, don't prefund more balance.
-> 4. **Track PENDING state per sender address and never re-broadcast while a prior submission is still queued.** Every duplicate PENDING multiplies the balance required to clear the batch. Use Pending Transactions (`api/v1/pendingtxs` with `{ address }`, same API key that broadcast) as the source of truth before submitting another tx for the same sender, and avoid scheduled "retry every N minutes" loops that re-send the same payload.
+> 4. **Track PENDING state per sender address and never re-broadcast while a prior submission is still queued.** Every duplicate PENDING multiplies the balance required to clear the batch. De-duplicate on your own idempotency record (one payment intent → one signed tx) before building; Pending Transactions (`api/v1/pendingtxs` with `{ address }`, same API key that broadcast) returns counts and total quoted fees for balance sizing, not payloads. Avoid scheduled "retry every N minutes" loops that re-send the same payload.
 > 5. **Size the TFN/TFU balance for the full queued batch, not per tx.** Required balance = Σ (quoted fee per queued tx). If any tx in the batch cannot be funded, the resource module blocks the entire batch.
 > 6. **Prefer `allow_negative_balance=true` or switch to instant-payment mode when per-tx volume is unpredictable** — account mode with delayed txs is the easiest way to get stuck with a blocked queue.
 
 ```typescript
+// 0. De-duplicate BEFORE building: one payment intent → one signed transaction, ever.
+//    Pending Transactions returns counts only, so it cannot tell you whether THIS payload
+//    was already sent; your own idempotency record is the source of truth.
+if (await alreadySubmitted(idempotencyKey)) {
+  return; // do NOT build, sign or broadcast again — a second signed tx is a second transfer
+}
+
 // 1. Estimate energy for THIS specific transaction — never reuse a cached or
 //    hardcoded value. Delayed mode quotes and reserves resources against this.
 const { energy_used } = await tronWeb.transactionBuilder.triggerConstantContract(
@@ -618,14 +636,13 @@ const prepared = await prepareTransaction(tronWeb, localTx.transaction, {
 // 4. Sign with 4 args: (tx, privateKey, false, false)
 const signed = await tronWeb.trx.sign(prepared, privateKey, false, false);
 
-// 5. De-duplicate: check this sender's queue (same API key that broadcasts) and your own
-//    idempotency record before sending — never resend a payload that is already queued
+// 5. Balance sizing: the queue's total quoted fee must fit the TFN balance
+//    (same API key that broadcasts; returns counts and totals, not payloads)
 const pending = await tronWeb.fullNode.request<PendingTxsInfo>(
   'api/v1/pendingtxs', { address: from }, 'post',
 );
-if (pending.pending_transactions_amount > 0 && alreadySubmitted(idempotencyKey)) {
-  return; // do NOT re-broadcast — a duplicate would multiply the required balance
-}
+// compare pending.pending_total_price_fee (+ this tx's quote) against balance_rtrx from /api/v1/config
+await markSubmitted(idempotencyKey, signed.txID); // record before broadcasting
 
 // 6. Broadcast — does not wait for on-chain confirmation
 const reply = (await tronWeb.trx.sendRawTransaction(signed)) as unknown as TransatronBroadcastResult;
