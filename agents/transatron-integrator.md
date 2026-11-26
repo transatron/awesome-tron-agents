@@ -77,7 +77,7 @@ async function broadcast(tx: any, isEnergyApplied: boolean) {
   const client = isEnergyApplied ? payerTronWeb : userTronWeb;
   const reply = (await client.trx.sendRawTransaction(tx)) as unknown as TransatronBroadcastResult;
   // Do NOT `if (!reply.result) throw` — a false `result` can still mean "may still land".
-  // Return the reply and its outcome; the caller polls, rebroadcasts or rebuilds per outcome.
+  // Return the reply and its outcome; the caller polls, or builds and signs a new tx, per outcome.
   return { reply, outcome: classifyBroadcast(reply) };
 }
 ```
@@ -183,7 +183,7 @@ Apply in this order:
 5. **`INSTANT_PAYMENT_UNDERPRICED`.** The instant payment does not cover the transaction, and the user transaction was **not broadcast**. Re-estimate, re-create the payment transaction, and try again.
 6. **`result: true` / `SUCCESS`.** Accepted by the network: poll the txid for the result.
 7. **`DUP_TRANSACTION_ERROR`.** The network already holds this transaction: treat it as accepted, and do not rebuild. The reply comes in three shapes: a full `transatron` object, a `transatron` object holding **only** `order_id`, or no `transatron` object at all. Never assume `transatron.code` exists because `transatron` does.
-8. **Bulk charge failure.** `transatron.code` is `ERROR`, the top-level `code` is `OTHER_ERROR`, and there is no may-still-land text. Nothing was charged and, with bypass off, the transactions were **not broadcast**: rebroadcast the same signed transactions. (With bypass on they were broadcast without Transatron's resources, so the network charged the sender as usual. The top-level `code` is then the node's result, and you handle it by the other rules.) Docs: [Bulk charge failure](https://docs.transatron.io/release_notes/BulkChargeFailure).
+8. **Bulk charge failure.** `transatron.code` is `ERROR`, the top-level `code` is `OTHER_ERROR`, and there is no may-still-land text. Nothing was charged and, with bypass off, the transactions were **not broadcast**. Build new transactions, sign them and send them. **Never resend the same signed transaction:** it is answered `DUP_TRANSACTION_ERROR` and is not processed. A new transaction needs new `raw_data` (fresh reference block and expiration via `prepareTransaction`); signing the same `raw_data` again gives the same txid. With bypass on they were broadcast without Transatron's resources, so the network charged the sender as usual; never re-sign them. The top-level `code` is then the node's result, and you handle it by the other rules. An instant payment is never part of a bulk, so this rule does not apply to it. Docs: [Bulk charge failure](https://docs.transatron.io/release_notes/BulkChargeFailure).
 9. **Any other `OTHER_ERROR` / `NOT_ENOUGH_EFFECTIVE_CONNECTION`.** A request error: the transaction was never broadcast. Fix the request.
 10. **Rejections.** `SIGERROR`, `TOO_BIG`, `CONTRACT_VALIDATE_ERROR`, `BANDWITH_ERROR`, `CONTRACT_EXE_ERROR`, `TRANSACTION_EXPIRATION_ERROR` and `TAPOS_ERROR` are final: fix the cause and rebuild. Other node codes are handled by rule 1 first, then treated as rejections.
 
@@ -258,7 +258,7 @@ type BroadcastOutcome =
   | { kind: 'unknown'; pollUntil?: string }      // poll the txid (until pollUntil); never rebuild/re-sign
   | { kind: 'pending' }                          // delayed, buffered
   | { kind: 'underpriced' }                      // instant payment too small; user tx not broadcast
-  | { kind: 'rebroadcast' }                      // bulk charge failure, bypass off: resend the SAME signed tx
+  | { kind: 'not_broadcast_rebuild' }            // bulk charge failure, bypass off: build, sign and send a NEW tx
   | { kind: 'request_error' }                    // never broadcast: fix the request
   | { kind: 'rejected'; code: string };          // final: fix the cause and rebuild
 
@@ -279,7 +279,7 @@ export function classifyBroadcast(r: TransatronBroadcastResult): BroadcastOutcom
   if (tt?.code === 'INSTANT_PAYMENT_UNDERPRICED') return { kind: 'underpriced' };
   if (r.result === true || r.code === 'SUCCESS') return { kind: 'accepted' };
   if (r.code === 'DUP_TRANSACTION_ERROR') return { kind: 'accepted' }; // tt may be absent or hold only order_id
-  if (r.code === 'OTHER_ERROR' && tt?.code === 'ERROR') return { kind: 'rebroadcast' };
+  if (r.code === 'OTHER_ERROR' && tt?.code === 'ERROR') return { kind: 'not_broadcast_rebuild' }; // never resend the same signed tx
   if (transportCode) return { kind: 'request_error' };
   return { kind: 'rejected', code: r.code ?? 'UNKNOWN' };
 }
@@ -401,33 +401,39 @@ for (const signedTx of signedTxs) {
 const sent = await Promise.all(sends);
 
 // 2. Act on each outcome — there is no "retry everything that is not confirmed" step
-for (let { signedTx, reply, error } of sent) {
+for (const { signedTx, reply } of sent) {
   if (!reply) { watch(signedTx.txID); continue; }       // no reply: treat as unknown
-  let outcome = classifyBroadcast(reply);
-  if (outcome.kind === 'rebroadcast') {
-    // Bulk charge failure, bypass off: nothing charged, not broadcast — resend the SAME signed tx once
-    ({ reply, error } = await send(signedTx));
-    if (!reply) { watch(signedTx.txID); continue; }
-    outcome = classifyBroadcast(reply);                 // the resend's reply replaces the first
-  }
+  const outcome = classifyBroadcast(reply);
   record(signedTx.txID, reply, outcome);                // keep txid, order_id, outcome for booking
   switch (outcome.kind) {
     case 'accepted':
     case 'unknown':        // poll the txid (until outcome.pollUntil); never rebuild or re-sign
       watch(signedTx.txID, outcome.kind === 'unknown' ? outcome.pollUntil : undefined);
       break;
-    case 'rebroadcast':    // failed twice: stop and surface it; still never re-sign
-    case 'rejected':       // final: fix the cause, then rebuild this one transaction
+    case 'pending':        // delayed: buffered by Transatron; see Delayed Transactions
+      watch(signedTx.txID);
+      break;
+    case 'not_broadcast_rebuild': // bulk charge failure, bypass off: nothing charged, never broadcast
+    case 'rejected':              // final: fix the cause first
+      // Build a NEW transaction for the same payment (new raw_data), sign it and send it.
+      // Never resend signedTx: the same signed tx is answered DUP_TRANSACTION_ERROR and is not processed.
+      rebuildAndSign(signedTx.txID, outcome);
+      break;
+    case 'underpriced':    // instant payments only; not expected on an account-based send
     case 'request_error':  // never broadcast: fix the request
       reportFailure(signedTx.txID, outcome);
       break;
+    default: {
+      const unhandled: never = outcome;                 // every outcome kind must be handled
+      throw new Error(`Unhandled outcome ${JSON.stringify(unhandled)}`);
+    }
   }
 }
 
 // 3. After each watched txid lands, book its fee per order_id with readCharge(spenderKey, reply, true)
 ```
 
-`watch` polls as in [Broadcast Polling](#broadcast-polling). `record` persists the reply per transaction. `reportFailure` is your error path. Read `transatron.code` on each reply, not only the top-level `code`.
+`watch` polls as in [Broadcast Polling](#broadcast-polling). `record` persists the reply per transaction. `rebuildAndSign` is your path that builds a new transaction from the same payment intent, signs it and sends it (for `rejected`, only after the cause is fixed). `reportFailure` is your error path. Read `transatron.code` on each reply, not only the top-level `code`.
 
 When balance reaches 0, bypass setting determines behavior: burn TRX from sender or return error. See [Balance Replenishment](#balance-replenishment).
 
@@ -596,6 +602,8 @@ Docs: [About Delayed Transactions](https://docs.transatron.io/transatron_node_ap
 // 0. De-duplicate BEFORE building: one payment intent → one signed transaction, ever.
 //    Pending Transactions returns counts only, so it cannot tell you whether THIS payload
 //    was already sent; your own idempotency record is the source of truth.
+//    One exception: a send recorded as a bulk charge failure with bypass off was never
+//    broadcast, so clear its record and build, sign and send a new transaction.
 if (await alreadySubmitted(idempotencyKey)) {
   return; // do NOT build, sign or broadcast again — a second signed tx is a second transfer
 }
@@ -710,7 +718,7 @@ Transatron uses `fee_limit` to decide how much energy to delegate and — critic
 
 ### Diagnosing Missing Transaction Hashes
 
-If a transaction hash doesn't appear in the blockchain explorer, classify the reply ([Step 1](#step-1--classify-the-outcome-this-decides-whether-anything-may-be-rebuilt)). Check both the node's top-level `code` / decoded `message` and `transatron.code`. Common causes: fee payment transaction failed, a bulk charge failure (rebroadcast the same signed tx), or transaction validation rejection. If the outcome is unknown, keep polling until its expiration before deciding anything.
+If a transaction hash doesn't appear in the blockchain explorer, classify the reply ([Step 1](#step-1--classify-the-outcome-this-decides-whether-anything-may-be-rebuilt)). Check both the node's top-level `code` / decoded `message` and `transatron.code`. Common causes: fee payment transaction failed, a bulk charge failure with bypass off (never broadcast: build, sign and send a new transaction; the same signed tx is answered `DUP_TRANSACTION_ERROR`), or transaction validation rejection. If the outcome is unknown, keep polling until its expiration before deciding anything.
 
 ### Non-Spender Key Does Not Deduct Balance
 
@@ -933,7 +941,7 @@ When writing Transatron integration code:
 12. Never submit the same transaction to both Transatron and another node
 13. Size `fee_limit` accurately per tx (estimate + 20% headroom, with a sanity cap) — Transatron uses it to quote and delegate. Never hardcode.
 14. Classify every broadcast reply ([Step 1](#step-1--classify-the-outcome-this-decides-whether-anything-may-be-rebuilt)): decode `message` and match the may-still-land prefix first; read both the node's top-level `code` and `transatron.code`; handle a `DUP_TRANSACTION_ERROR` whose `transatron` holds only `order_id`, or is absent
-15. Never rebroadcast or re-sign because `is_final` is `false`/missing, a reply is `SETTLEMENT_PENDING`, or every route failed — poll the txid until its expiration and check the order. The only rebroadcast is the bulk charge failure (`ERROR` + `OTHER_ERROR`, no may-still-land text), and it resends the same signed tx
+15. Never rebroadcast or re-sign because `is_final` is `false`/missing, a reply is `SETTLEMENT_PENDING`, or every route failed — poll the txid until its expiration and check the order. After a bulk charge failure with bypass off (`ERROR` + `OTHER_ERROR`, no may-still-land text), build, sign and send new transactions; never resend the same signed transaction (it is answered `DUP_TRANSACTION_ERROR` and is not processed)
 16. Book fees only from `is_final: true`; otherwise from `GET /api/v1/orders` (Spender key) by `order_id`, or `?search=<txid>` once landed. Treat an order's `is_final` `true`/`null` as final, `false` as still settling
 17. Ask for or detect the key type before proposing an Orders lookup. On a Non-Spender / instant client, the end user pays exactly the instant payment; cashback to the key owner is signed
 18. **For delayed transactions:** ask whether Delayed transactions is enabled on the key (off by default for new keys; existing keys keep their setting); estimate energy per tx, de-duplicate against Pending Transactions before broadcasting, and never run retry loops that rebroadcast the same payload on a timer — duplicates multiply the balance required to clear the batch
