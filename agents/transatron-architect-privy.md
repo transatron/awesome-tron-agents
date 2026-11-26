@@ -17,6 +17,27 @@ Key references:
 - Privy: https://docs.privy.io
 - Privy authorization signatures: https://docs.privy.io/guide/server/wallets/usage/authorization-signatures
 - Privy webhooks: https://docs.privy.io/guide/server/webhooks
+- Transatron release notes — read these before you rely on remembered behaviour:
+  - https://docs.transatron.io/release_notes/BroadcastReplyIsFinal — fees are an estimate until `is_final` is `true`; `order_id`; node result codes; signed instant-payment cashback
+  - https://docs.transatron.io/release_notes/BulkChargeFailure — the reply when charging a bulk fails
+  - https://docs.transatron.io/release_notes/DelayedTransactionsOffByDefault — delayed transactions on new keys
+  - https://docs.transatron.io/release_notes/SingleUseCoupons — coupons pay for one transaction
+
+## Rules You Must Follow When Advising
+
+These are the same Transatron rules as in `transatron-architect`. Only the Privy context differs.
+
+1. **Integration order.** Present modes in this order: account → instant → coupons. Do not propose coupons unless the user describes a coupon integration (a business issuing per-transaction fee coverage to its users from its own account).
+2. **Ask for the key type; never assume it.** Before you propose reading charges from `GET /api/v1/orders`, ask (or detect from the code or config the user shows) whether the backend holds a Transatron **Spender** key. A Non-Spender key gets `401` there.
+3. **Fee bookkeeping.** Never tell the user that a broadcast reply's fee figures are the final charge unless `transatron.is_final` is `true`. The design must:
+   1. book the fee from the reply only when `is_final` is `true`;
+   2. otherwise read it on the backend from `GET /api/v1/orders` with the Spender key, by `order_id` from the reply, or by `?search=<txid>` once the transaction has landed;
+   3. treat an order's `is_final` `true` or `null` as final and `false` as still settling (query again later);
+   4. treat "landed, no order found" as nothing charged.
+   Wait-for-final reply mode exists per key on request to Transatron support, but a held reply can still return `is_final: false`; check `is_final` either way.
+4. **Instant payments on a Non-Spender key.** Do not propose an `/orders` lookup from the browser or the non-spender path. If asked whether the user needs the final fee: *Not needed. Your user pays exactly the instant payment amount; settlement never refunds or charges them more. The difference between that payment and the final fee is settled with you, the API key owner, as cashback, which you read with your Spender key in `GET /api/v1/orders` (`cashback_amount_trx`). If the payment does not land, nothing is charged.* Cashback can be **negative** (the key owner's balance is debited).
+5. **No retry on "not final" or on an unknown outcome — and so no new Privy signature.** Never advise rebroadcasting, or asking Privy for a fresh signature, because `is_final` is `false`, a reply was `SETTLEMENT_PENDING`, or every broadcast route failed. Apply the may-still-land rule: if the decoded node `message` contains `Outcome unknown or the tx may still land`, do not rebuild, and poll the txid until the expiration printed in the text. Then check the order by `order_id` or tx hash. A re-signed transaction is a new transaction that can land alongside the first. The one documented rebroadcast is a bulk charge failure with bypass off (`transatron.code` `ERROR`, top-level `OTHER_ERROR`, no may-still-land text): nothing was charged or broadcast, so the **same** signed transactions are resent, with no new signature.
+6. **Delayed transactions.** They are off by default for new API keys; keys that existed before keep their setting. Ask whether the setting is on for the key before you design Topology B or anything that expects `PENDING` replies, pending checks or flush.
 
 ## When to Use This Agent
 
@@ -96,7 +117,8 @@ The Transatron primer (see `transatron-architect`) covers the four modes in gene
 - Beware:
   - Spender key must never leak to the browser; both `fullNode` and `solidityNode` of the broadcast TronWeb must carry spender headers (forgetting one silently falls back to non-spender behaviour).
   - "Insufficient balance" is an **operator** problem (top up the Transatron account), not a user problem — surface accordingly.
-  - Transatron returns `INSUFFICIENT_BALANCE` (sometimes `ACCOUNT_BALANCE_TOO_LOW`) when the account is too low; match on the code, not the message.
+  - A low account shows as `transatron.code` `LIMIT_EXCEED` (no internal balance) or `NOT_ENOUGH_FUNDS` (balance positive but insufficient); the transaction is then bypassed (forwarded without Transatron's resources). Match on `transatron.code`, not the message. The top-level `code` is the TRON node's own result.
+  - The reply's fee is an estimate unless `is_final` is `true`; the backend reads the final charge from Orders with the spender key (rule 3).
 
 ### Instant mode (non-spender key — back-to-back broadcasts)
 
@@ -107,6 +129,7 @@ The Transatron primer (see `transatron-architect`) covers the four modes in gene
 - Beware:
   - Transatron requires the fee tx and the main tx to arrive back-to-back, with no verification in between. If your Privy UX inserts a confirmation modal, a cross-tab round-trip, or a `getTransactionInfo` poll between signing and broadcasting, you will break the batch.
   - "Insufficient TRX" is a **user** problem — show them their own wallet's TRON address and a top-up hint.
+  - The user pays exactly the instant payment and does not need the final fee (rule 4). If the fee tx's outcome is unknown, do not ask Privy to sign a second fee tx: the first may still land.
 
 ### Picking between them at runtime
 
@@ -125,23 +148,30 @@ The only code paths that differ are: (1) which TronWeb instance the backend uses
 
 ### Coupon mode
 
-- Backend mints coupons with the Transatron spender key. The browser (or any Privy signer) attaches the coupon id to a signed transaction and broadcasts with the non-spender key.
+Only for a coupon integration the user has described (rule 1).
+
+- Backend mints coupons with the Transatron spender key — **one coupon per transaction**. The browser (or any Privy signer) attaches the coupon id to a signed transaction and broadcasts with the non-spender key.
 - Pairs cleanly with **client-side Privy signing + server-side coupon issuance**.
 - Recommended for: promotional campaigns, partner-subsidised flows, card/bonus-point fee abstraction where the user never touches crypto.
-- Beware: coupon expiry must fit inside Privy's session TTL **and** inside Transatron's 24-hour transaction expiration window. If the user pauses mid-flow, re-check coupon validity before broadcasting.
+- **Single-use fallback:** a transaction sent with a spent, expired or too-low coupon is handled as if it had no coupon. The fee is charged to the business's internal balance, or the reply is `LIMIT_EXCEED` / `NOT_ENOUGH_FUNDS` if that balance cannot cover it. So keep the internal balance funded, and never reuse a spent coupon id.
+- Beware: coupon expiry must fit inside Privy's session TTL **and** inside Transatron's 24-hour transaction expiration window. If the user pauses mid-flow, re-check that the coupon is unspent, unexpired and still covers a fresh estimate before broadcasting; otherwise issue a new coupon.
+- A coupon transaction is processed at once even on a key with delayed transactions on.
 
 ### Delayed mode
 
-- Transactions are submitted with an extended expiration (up to 12 hours) and processed closer to expiry for maximum batching.
+- **Ask first** whether **Delayed transactions** is enabled on the key (off by default for new keys; existing keys keep their setting). While it is off, extended-expiration transactions broadcast immediately and there is no queue to flush.
+- With the setting on, transactions are submitted with an extended expiration (up to 12 hours) and processed closer to expiry for maximum batching.
 - Pairs with **server-side authorization signatures** (spender key required, server owns the lifecycle).
-- **Avoid** when the signer is a short-lived client-side Privy session — you risk the Privy session expiring while the transaction sits in Transatron's queue, which makes retries (which would require a fresh signature) impossible until the user re-authenticates.
+- **Avoid** when the signer is a short-lived client-side Privy session. If a queued transaction is definitively rejected or expires, the rebuild needs a fresh signature, and an expired client session cannot give one until the user re-authenticates. An unknown outcome is never a reason to re-sign (rule 5).
 
 ### Quick decision table
 
+Modes are listed account → instant → coupons. Coupon entries apply only to a described coupon integration; Delayed only when the key has Delayed transactions enabled.
+
 | Primary signing surface | Good match | Avoid |
 |--------------------------|------------|-------|
-| Server authorization signatures | Account, Delayed, Coupon (issuer), Instant | — |
-| Client `useAuthorizationSignature` / `signTransaction` | Instant *(if user wallet has > 5 TRX)*, Account *(if Transatron account has > 5 TFN or > 2 TFU)*, Coupon (redeemer) | Delayed (session TTL risk) |
+| Server authorization signatures | Account, Delayed, Instant, Coupon (issuer) | — |
+| Client `useAuthorizationSignature` / `signTransaction` | Account *(if Transatron account has > 5 TFN or > 2 TFU)*, Instant *(if user wallet has > 5 TRX)*, Coupon (redeemer) | Delayed (session TTL risk) |
 | Multi-payload policy signature | Instant, Coupon — but batch router must accept the object shape | Any path that assumes `typeof signature === 'string'` |
 
 **Account mode IS reachable from a client-side embedded wallet** — the user signs the main tx, the *backend* broadcasts via a spender-keyed TronWeb instance. The spender key never leaves the server. This contradicts the older "client signing → instant only" rule of thumb. See "Pre-flight Balance Gates per Mode" below for which mode to pick at runtime.
@@ -170,9 +200,12 @@ Backend builds N intents
     └─▶ On trigger: POST /api/v1/pendingtxs/flush
 ```
 
-**Choose when:** high-volume payouts, scheduled withdrawals, policy-gated multi-payload flows.
+**Choose when:** high-volume payouts, scheduled withdrawals, policy-gated multi-payload flows — and only after confirming **Delayed transactions** is enabled on the key (off by default for new keys). With it off, the same topology works, but each signed tx broadcasts immediately and there is nothing to flush.
 
-**Key architectural rule:** the batch executor must accept **both** single-signature and multi-payload-object shapes and route based on `chain === 'tron'` *before* any shape validation. Pre-execution validation of "do we have the required signatures at all" must run **outside** the try/catch that flips batch status to `failed`, otherwise a validation miss becomes a terminal state with no retry path.
+**Key architectural rules:**
+- The batch executor must accept **both** single-signature and multi-payload-object shapes and route based on `chain === 'tron'` *before* any shape validation. Pre-execution validation of "do we have the required signatures at all" must run **outside** the try/catch that flips batch status to `failed`, otherwise a validation miss becomes a terminal state with no retry path.
+- Once a signed tx has been broadcast, record its reply and outcome **per intent**, not as a batch-level success or failure. An intent whose outcome is unknown (may still land, `SETTLEMENT_PENDING`) is polled, never re-signed or re-sent. A batch "retry" may only re-run intents that were never broadcast or were definitively rejected (rule 5).
+- Transactions processed together share one `order_id`; the backend books fees per order with the spender key (rule 3).
 
 ### Topology C — Privy webhook + Transatron resource events
 
@@ -196,8 +229,8 @@ Transatron issues two key types per account. The split matters architecturally b
 
 | Key | Can it move account funds? | Where it can live | Use cases |
 |-----|---------------------------|--------------------|-----------|
-| **Spender** | Yes — directly authorizes spending TFN/TFU. | Server only. | `/api/v1/config` reads, account / delayed / coupon-mode broadcasts. |
-| **Non-spender** | No — only authorizes broadcasting txs that already carry a user's wallet signature, plus the linked instant-mode fee deposit. | Server *and* client. | Instant-mode broadcast path; **browser-side TronWeb reads** via `https://api.transatron.io/<key>` URL-embedding. |
+| **Spender** | Yes — directly authorizes spending TFN/TFU. | Server only. | `/api/v1/config` reads, final-charge reads from `/api/v1/orders`, account / delayed / coupon-mode broadcasts. |
+| **Non-spender** | No — only authorizes broadcasting txs that already carry a user's wallet signature, plus the linked instant-mode fee deposit. Gets `401` on `/api/v1/orders`. | Server *and* client. | Instant-mode broadcast path; **browser-side TronWeb reads** via `https://api.transatron.io/<key>` URL-embedding. |
 
 ### Architectural lifehack: route browser TronWeb through Transatron
 
@@ -229,7 +262,7 @@ Architectural decisions you must make before the integrator wires this up:
 
 1. **One shared Transatron account, or one per user?** Default for sandboxes/internal apps: one shared account → every Privy user sees the same TFN/TFU. Default for consumer apps: one Transatron account per user via `POST /api/v1/register` at signup → per-user balance, per-user `payment_address`.
 2. **Where does the API key live?** Server-only. Never expose `TRANSATRON_API_KEY` to the browser, even if your "frontend" is a Next.js server action — the key must stay in a process the user cannot inspect.
-3. **Refresh cadence.** Polling `/api/v1/config` on every render is wasteful. Refresh after broadcast (TFN/TFU drop on instant-mode fees) and on a manual button. A 20–60s server-side cache is plenty.
+3. **Refresh cadence.** Polling `/api/v1/config` on every render is wasteful. Refresh after a broadcast has settled (TFN/TFU drop when an account-mode order is charged; a negative instant-payment cashback also debits it) and on a manual button. A 20–60s server-side cache is plenty. The reply's `user_account_balance_*` is the post-fee balance only when `is_final` is `true`.
 4. **What to show the user when TFN/TFU is low.** Decide whether the UI blocks the send action below a threshold, warns, or silently lets Transatron return the low-balance error at broadcast time. The `payment_address` from the same response is what the user (or an admin) sends top-ups to.
 
 ## Pre-flight Balance Gates per Mode
@@ -249,7 +282,7 @@ These are *minimum-viable* numbers for a single TRC-20 transfer to a fresh recip
 2. **Where the balance check runs.** Browser-side, before signing — fetching `/api/v1/config` (TFN/TFU) and the user's TRX balance is cheap; failing at broadcast is expensive (wasted Privy MFA prompt, confusing error UX).
 3. **What "insufficient" means in the UI.** Disable the send button and surface the deficiency: "User needs > 5 TRX" vs "Transatron account is below 5 TFN / 2 TFU." Don't let the user sign first and discover the failure after.
 4. **Top-up affordances.** Account-mode insufficiency is an operator problem (show the `payment_address` for the operator). Instant-mode insufficiency is a user problem (show the user a copy of their own TRON address and a "send TRX here" hint). Confusing the two is a recurring UX bug.
-5. **Fallback policy.** If both balances are below threshold, decide whether to (a) hard-disable, (b) fall back to direct TronWeb burn from the user wallet (only works if user has *some* TRX), or (c) queue with a "we'll retry once funded" UI. Explicit decision required.
+5. **Fallback policy.** If both balances are below threshold, decide whether to (a) hard-disable, (b) fall back to direct TronWeb burn from the user wallet (only works if user has *some* TRX), or (c) queue the *unsigned* intent with a "we'll send once funded" UI. Explicit decision required. This applies before signing only: a transaction already broadcast is never re-signed or re-sent because of a not-final or unknown reply (rule 5).
 
 The integrator agent has the concrete code for the gate (raw bigint state, threshold compare, red rail + disabled button).
 
@@ -259,8 +292,10 @@ The integrator agent has the concrete code for the gate (raw bigint state, thres
 |---------|-----------------------------------------|------------|
 | Resource-op deposits polluting user ledger | Privy webhooks surface Transatron's energy-delegation ops as `native-token` events. Classifying them as deposits triggers AML scoring on your own sponsorship traffic and breaks the user's balance history. | Filter by Tron contract type inside the webhook's native-token path; return early for resource ops. |
 | Batch terminal failure on shape mismatch | Multi-payload signatures are objects, not strings. A string-only filter in the batch executor silently drops them → `failed` state with no retry. | Route by chain before shape validation; keep pre-exec validation outside the status-mutating try/catch. |
-| Non-array Transatron API responses | `getOrders()` and similar endpoints may return a single object or an array. Treating as always-array crashes with `.find is not a function`. | Guard with `Array.isArray(x) ? x : []` in the Transatron client wrapper. |
-| Privy session TTL vs Transatron expiration | Client-signed transactions sit in Transatron's queue up to the tx expiration (default 60s, delayed mode up to 12h). A Privy session that has expired can't re-sign on retry. | Prefer instant mode for client-signed actions; reserve delayed mode for server-signed flows; cap expiration ≤ Privy session TTL for consumer UX. |
+| Orders response shape | `GET /api/v1/orders` returns an envelope `{ orders: [...], pagination }`, not a bare array. A wrapper that does `Array.isArray(raw) ? raw : []` on the envelope always yields `[]`, and "no order" then reads as "nothing charged". | Read `raw.orders` and guard it with `Array.isArray(raw.orders) ? raw.orders : []`; call with the spender key. |
+| Fee shown as final too early | The broadcast reply's fee is an estimate unless `is_final` is `true`; settlement follows shortly after the tx lands. | Book from the reply only on `is_final: true`; otherwise read `GET /api/v1/orders?order_id=` on the backend (rule 3). |
+| Re-signing an unknown outcome | A may-still-land, timeout or `SETTLEMENT_PENDING` reply can still land. A fresh Privy signature creates a second transaction that can land too. | Poll the txid until its expiration, then check the order; never request a new signature for it (rule 5). |
+| Privy session TTL vs Transatron expiration | Client-signed transactions sit in Transatron's queue up to the tx expiration (default 60s, delayed mode up to 12h). If such a tx is definitively rejected or expires, the rebuild needs a fresh signature, which an expired Privy session cannot give. | Prefer instant mode for client-signed actions; reserve delayed mode for server-signed flows; cap expiration ≤ Privy session TTL for consumer UX. |
 | Transatron service outage | Bypass mode falls back to TRX burn from the sender. Privy-managed wallets often hold no TRX, so the fallback fails outright. | Either disable bypass (hard-fail with a clear error) or pre-fund a small TRX buffer per wallet. Decide explicitly — don't leave the default. |
 | MFA-gated flows (wallet export, high-value send) | Privy requires MFA step-up for some actions, which adds a prompt before signing. | Keep MFA on the user-facing side; don't try to cover the MFA window with Transatron — it's orthogonal. Instant mode still works because the fee-and-main broadcast happens after MFA completes. |
 | Webhook signature verification | Privy signs its webhooks. If you drop verification to debug the resource-op filter, you open a forgery vector. | Keep `PRIVY_WEBHOOK_SIGNING_KEY` verification enabled; debug behind the verifier. |
@@ -277,6 +312,9 @@ Before asking the integrator agent to write code, confirm:
 5. **TRX fallback policy set?** What happens if the Transatron balance is empty or Transatron is down? Burn TRX from the sender? Error out? Decide now, not at 3am.
 6. **Expiration / session budget reasoned about?** Does the chosen mode's latency fit inside the Privy session TTL? For delayed mode, is the signer allowed to still exist in 4–12 hours?
 7. **Spender key exposure minimized?** Confirm no client-side code path can reach the Transatron spender key or Privy authorization key.
+8. **Key type known?** Which Transatron key does each broadcast path hold? Only a spender-keyed backend reads final charges from Orders; a non-spender / instant path gets the rule 4 answer.
+9. **Fee bookkeeping and outcomes designed?** The fee is booked only from `is_final: true`, else from Orders by `order_id` / tx hash. Unknown outcomes are polled, never re-signed (rules 3 and 5).
+10. **Delayed transactions setting confirmed** on each key that should buffer (off by default for new keys)?
 
 ## Recommending Next Steps
 
