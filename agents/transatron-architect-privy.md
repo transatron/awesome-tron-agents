@@ -243,7 +243,7 @@ Treat this as the default for any production Privy + Transatron deployment — T
 ### Architectural decisions to confirm
 
 1. **Both keys provisioned?** Sandboxes sometimes start with one key and add the second later. Decide upfront — code that assumes one key conflates surfaces.
-2. **Is `/api/v1/config` reachable with the non-spender key?** Some accounts allow it, some require the spender. Default to spender for `/api/v1/config` so behaviour is uniform.
+2. **`/api/v1/config` needs the spender key.** The endpoint requires the spender key, so TFN/TFU reads go through the backend; do not plan config reads on the non-spender key.
 3. **What happens if Transatron is down?** The browser-side TronWeb has no fallback when its RPC is `api.transatron.io`. Decide: hard-fail with a clear error, or fall back to a public mirror you've validated. Don't leave it ambiguous.
 4. **Where do you rotate keys?** Both must rotate together if either leaks. Rotation runbook should know to redeploy frontend (bundle hash changes) and backend at the same time.
 
@@ -254,14 +254,14 @@ Two distinct balance concepts coexist when Transatron sponsors fees behind a Pri
 | Balance | Lives on | Read via | API key needed | Per-user? |
 |---------|----------|----------|----------------|-----------|
 | **TRX / TRC-20 (e.g. USDT)** | The user's TRON address (Privy embedded wallet) | Public TronGrid `getBalance` / `triggerConstantContract balanceOf` | None | Yes |
-| **TFN / TFU** (Transatron prepaid credit) | The Transatron account, keyed by API key | `GET /api/v1/config` on Transatron API | Yes (spender or account-bound) | Only if one Transatron account per user (via `POST /api/v1/register`) |
+| **TFN / TFU** (Transatron prepaid credit) | The Transatron account, keyed by API key | `GET /api/v1/config` on Transatron API | Yes (spender key) | Only if one Transatron account per user (via `POST /api/v1/register`) |
 
 If the UI needs to display "how much fee budget is left," it must hit `/api/v1/config` — TFN and TFU are **not** TRC-20 contracts and there is no on-chain `balanceOf` for them. The integrator agent has the wiring details (backend proxy, caching, formatting).
 
 Architectural decisions you must make before the integrator wires this up:
 
 1. **One shared Transatron account, or one per user?** Default for sandboxes/internal apps: one shared account → every Privy user sees the same TFN/TFU. Default for consumer apps: one Transatron account per user via `POST /api/v1/register` at signup → per-user balance, per-user `payment_address`.
-2. **Where does the API key live?** Server-only. Never expose `TRANSATRON_API_KEY` to the browser, even if your "frontend" is a Next.js server action — the key must stay in a process the user cannot inspect.
+2. **Where does the API key live?** Server-only. Never expose the spender key (`TRANSATRON_API_KEY_SPENDER`) to the browser, even if your "frontend" is a Next.js server action — the key must stay in a process the user cannot inspect.
 3. **Refresh cadence.** Polling `/api/v1/config` on every render is wasteful. Refresh after a broadcast has settled (TFN/TFU drop when an account-mode order is charged; a negative instant-payment cashback also debits it) and on a manual button. A 20–60s server-side cache is plenty. The reply's `user_account_balance_*` is the post-fee balance only when `is_final` is `true`.
 4. **What to show the user when TFN/TFU is low.** Decide whether the UI blocks the send action below a threshold, warns, or silently lets Transatron return the low-balance error at broadcast time. The `payment_address` from the same response is what the user (or an admin) sends top-ups to.
 

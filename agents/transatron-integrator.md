@@ -1,6 +1,6 @@
 ---
 name: transatron-integrator
-description: "Use when integrating Transatron (Transfer Edge) for TRON transaction fee optimization, implementing fee payment modes (account, instant, coupon, delayed), or reducing blockchain operation costs."
+description: "Use when integrating Transatron (Transfer Edge) for TRON transaction fee optimization, implementing fee payment modes (account, instant, coupon, delayed), handling broadcast replies and booking the final fee, or reducing blockchain operation costs."
 tools: Read, Write, Edit, Bash, Glob, Grep, WebFetch, WebSearch
 model: inherit
 ---
@@ -63,7 +63,7 @@ When a user asks to test Transatron with a simple transfer, follow this approach
 3. Estimate regular Tron cost: `getChainParameters` → `getEnergyFee`/`getTransactionFee`, `triggerConstantContract` → `energy_used`, calculate total
 4. Get Transatron fee quote via `fullNode.request('wallet/triggersmartcontract', ...)` with `txLocal: true`
 5. Build locally via `_triggerSmartContractLocal`, prepare with solidified block via `prepareTransaction`, sign, broadcast
-6. Classify the reply and wait for confirmation (see [Broadcast Replies](#broadcast-replies-outcome-fees-and-retries)): poll `getTransactionInfo` (1.5s intervals, 50 retries); never rebuild or re-sign on an unknown outcome
+6. Classify the reply and wait for confirmation (see [Broadcast Replies](#broadcast-replies-outcome-fees-and-retries)): poll as in [Broadcast Polling](#broadcast-polling) (wait 10s, then every 5s until the transaction's expiration); never rebuild or re-sign on an unknown outcome
 7. Compare costs: the final charge (from the reply only if `is_final: true`, otherwise from `GET /api/v1/orders?order_id=` with the spender key) vs the regular Tron estimate
 
 **Key rules:** One TronWeb instance (Transatron only), account payment mode, `feeLimit` = `energy_used × energyFee` (never hardcode), fee quote via `fullNode.request()` (not `triggerSmartContract`), solidified block references via `prepareTransaction`, never send to self, never report the reply's fee as the final charge unless `is_final` is `true`.
@@ -494,22 +494,30 @@ const preparedFeeTx = await prepareTransaction(tronWeb, rawFeeTx, {
   expirationSeconds: 600,
 });
 const signedFeeTx = await tronWeb.trx.sign(preparedFeeTx);
+const signedMainTx = await tronWeb.trx.sign(preparedMainTx); // sign both BEFORE the first broadcast
 
-// 5. Broadcast fee tx, then main tx — back-to-back, NO verification in between
-await tronWeb.trx.sendRawTransaction(signedFeeTx);
+// 5. Broadcast fee tx, then main tx — back-to-back, NO on-chain verification in between
+const feeReply = (await tronWeb.trx.sendRawTransaction(signedFeeTx)) as unknown as TransatronBroadcastResult;
+const feeOutcome = classifyBroadcast(feeReply); // reads the reply in hand; no network call
+if (feeOutcome.kind !== 'accepted') {
+  // rejected / request_error / underpriced: not broadcast — re-quote, rebuild and re-sign both.
+  // unknown / duplicate / pending: the payment is out or may still land — poll feeReply.txid
+  // (until feeOutcome.pollUntil when present); never sign a second payment for this send.
+  throw new Error(`Instant payment not accepted: ${feeOutcome.kind} (${feeReply.txid})`);
+}
 
 // 6. Broadcast main tx immediately after fee tx
-const signedMainTx = await tronWeb.trx.sign(preparedMainTx);
-const result = await tronWeb.trx.sendRawTransaction(signedMainTx);
+const mainReply = (await tronWeb.trx.sendRawTransaction(signedMainTx)) as unknown as TransatronBroadcastResult;
+const mainOutcome = classifyBroadcast(mainReply); // Step 1 rules; 'underpriced' → re-quote, new payment
 ```
 
-**Critical: Do NOT check the fee deposit result before broadcasting the main transaction.** Transatron processes an instant payment and its main transaction as a pair — both must arrive back-to-back. Inserting any verification, polling, or `await getTransactionInfo()` between the two broadcasts breaks the pair and causes Transatron to process them independently, which means the main transaction loses its energy sponsorship. Send both `sendRawTransaction` calls sequentially with no checks in between. Verify the final result only after the main transaction broadcast returns. An instant payment is never part of a bulk, so the bulk charge failure rule ([Step 1](#step-1--classify-the-outcome-this-decides-whether-anything-may-be-rebuilt), rule 8) does not apply to it.
+**Critical: Do NOT wait for or verify the fee deposit on chain before broadcasting the main transaction.** Transatron processes an instant payment and its main transaction as a pair — both must arrive back-to-back. Inserting any verification, polling, or `await getTransactionInfo()` between the two broadcasts breaks the pair and causes Transatron to process them independently, which means the main transaction loses its energy sponsorship. Send both `sendRawTransaction` calls sequentially with no checks in between. Verify the final result only after the main transaction broadcast returns. An instant payment is never part of a bulk, so the bulk charge failure rule ([Step 1](#step-1--classify-the-outcome-this-decides-whether-anything-may-be-rebuilt), rule 8) does not apply to it.
 
 **Critical: Both fee and main transactions must use solidified block references.** Use `prepareTransaction()` (see `tron-developer-tronweb`) on both transactions before signing. Without this, micro-forks can cause TAPOS_ERROR and break the back-to-back pair.
 
 7% pricing tolerance between estimate and broadcast. If the fee drifts beyond 7%, Transatron returns an `INSTANT_PAYMENT_UNDERPRICED` error and does not broadcast — resubmit the simulation via `fullNode.request()` for an updated quote. TRX fee payment is cheaper than USDT.
 
-**Classify both replies** with `classifyBroadcast` ([Step 1](#step-1--classify-the-outcome-this-decides-whether-anything-may-be-rebuilt)). If the payment's outcome is `unknown`, do not sign a second payment: the first may still land. The user transaction proceeds when the payment transaction landed, whichever broadcast route accepted it.
+**Classify both replies** with `classifyBroadcast` ([Step 1](#step-1--classify-the-outcome-this-decides-whether-anything-may-be-rebuilt)), as in the example above: classifying the fee reply reads the reply you already have and does not break the pair. Only an `accepted` fee reply sends the main transaction. If the payment's outcome is `unknown`, do not sign a second payment: the first may still land. The user transaction proceeds when the payment transaction landed, whichever broadcast route accepted it.
 
 **Final fee on an instant-payment (Non-Spender) client.** The end user does not need it. They pay exactly the instant payment amount, and settlement never refunds or charges them more. The difference (payment − final fee) is settled with the API key owner as cashback, which can be **negative** (the owner's balance is debited). The owner reads it with the **Spender** key in `GET /api/v1/orders` (`cashback_amount_trx`), on the server. If the payment does not land, nothing is charged. Do not add an `/orders` call to the Non-Spender client (it gets `401`); the reply's `order_id` is for the end user to quote to the business.
 
@@ -535,7 +543,6 @@ Follow these steps for each transaction:
 const created = await payerTronWeb.fullNode.request<CouponCreateResponse>(
   'api/v1/coupon',
   {
-    address: userAddress,
     rtrx_limit: Math.ceil(quote.tx_fee_rtrx_account * 1.15),
     valid_to: Date.now() + 1000 * 60 * 60 * 24, // expiry timestamp (ms)
   },
@@ -691,7 +698,7 @@ function hexToUnicode(hex: string): string {
 
 ### Broadcast Polling
 
-After broadcasting, wait 10s for Transatron queue processing, then poll with 5s intervals. Use a two-step status check:
+After broadcasting, wait 10s for Transatron queue processing, then poll every 5s until the transaction lands or its expiration passes. This is the one polling cadence for every broadcast. Use a two-step status check:
 1. `getTransaction(txId)` → extract `ret[0].contractRet`
 2. `getTransactionInfo(txId)` → extract `receipt.net_usage`
 
@@ -936,7 +943,7 @@ When writing Transatron integration code:
 3. Decode hex-encoded messages with `hexToUnicode()`
 4. Use the correct deposit address: `payment_address` from `/api/v1/config` for account deposits, `deposit_address` from `getNodeInfo()` for instant payments
 5. Handle the 7% instant payment pricing tolerance — re-estimate if price drifts
-6. Implement broadcast polling (5-10s initial wait, 3s retries); for an unknown outcome keep polling until the transaction's expiration
+6. Implement broadcast polling as in [Broadcast Polling](#broadcast-polling) (wait 10s, then every 5s); for an unknown outcome keep polling until the transaction's expiration
 7. Fall back to 131,000 energy for USDT transfers when estimation fails or returns 0
 8. Never expose spender keys in client-side code
 9. Implement balance replenishment for account payment mode — check thresholds and auto-deposit

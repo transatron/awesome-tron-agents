@@ -124,7 +124,7 @@ export async function getAccountConfig() {
 
 - **Don't put the spender key in any `VITE_`-prefixed env var.** `VITE_*` ships to the bundle. The bundle is public.
 - **Don't use the spender key for instant-mode broadcasts.** It works, but you've now leaked spender-grade auth to a code path that didn't need it. Rotate the keys after.
-- **Picking the wrong header for `/api/v1/config`** silently 401s with non-spender keys at some accounts and quietly returns balances at others. Always use the spender key here so behaviour is consistent.
+- **Picking the wrong header for `/api/v1/config`.** The endpoint requires the spender key. Always send `TRANSATRON_API_KEY_SPENDER` here, from the backend.
 - **`https://api.transatron.io/<key>` URL-embedding** is an authentication mechanism, not a CDN URL. The full URL ends up in the browser's request log; if you accidentally use the spender key here, treat it as compromised and rotate immediately.
 
 ## Privy Client Initialization
@@ -301,7 +301,7 @@ async submitSignedIntent(dto: SignIntentDto) {
   // Attach to the pre-built TRON transaction
   const signedTx = this.tronClient.attachSignatures(intent.rawTx, signatures);
 
-  // Broadcast through Transatron — payment mode determined by which key is configured
+  // Broadcast through Transatron — account mode, spender key (instant mode: instantBroadcast below)
   return this.transatronClient.broadcast(signedTx);
 }
 ```
@@ -320,18 +320,18 @@ const TRANSATRON_URL = process.env.TRANSATRON_API_URL ?? 'https://api.transatron
 export class TransatronClient {
   private readonly logger = new Logger(TransatronClient.name);
   private readonly tron: TronWeb;
-  private readonly apiKey: string;      // the key this instance broadcasts with
-  private readonly spenderKey: string;  // server-only; used for Orders reads
+  private readonly spenderKey: string;  // server-only; broadcasts (account mode) and Orders reads
   readonly enabled: boolean;
 
   constructor() {
-    this.apiKey = process.env.TRANSATRON_API_KEY ?? '';
+    // This client is the account-mode surface, so it carries the spender key. The instant path
+    // broadcasts through the non-spender instance (see "Two backend TronWeb instances").
     this.spenderKey = process.env.TRANSATRON_API_KEY_SPENDER ?? '';
-    this.enabled = this.apiKey.length > 0;
+    this.enabled = this.spenderKey.length > 0;
 
     const hp = (url: string) =>
       new providers.HttpProvider(url, 60_000, '', '', {
-        'TRANSATRON-API-KEY': this.apiKey,
+        'TRANSATRON-API-KEY': this.spenderKey,
       });
 
     this.tron = new TronWeb({
@@ -824,7 +824,7 @@ Sometimes the UI needs to surface "how much fee budget is left on the Transatron
 
 ### Source of truth
 
-`GET /api/v1/config` on the Transatron API, with `TRANSATRON-API-KEY: <key>` header. Response includes:
+`GET /api/v1/config` on the Transatron API, with the spender key in the `TRANSATRON-API-KEY` header (the endpoint requires the spender key). Response includes:
 
 | Field | Meaning | Decimals |
 |-------|---------|----------|
@@ -840,7 +840,7 @@ The API key must stay on the server. Pattern: **backend proxies the call**, fron
 // backend — transatron.ts
 export async function getAccountConfig() {
   const url = `${env.TRANSATRON_API_URL.replace(/\/$/, '')}/api/v1/config`;
-  const resp = await fetch(url, { headers: { 'TRANSATRON-API-KEY': env.TRANSATRON_API_KEY } });
+  const resp = await fetch(url, { headers: { 'TRANSATRON-API-KEY': env.TRANSATRON_API_KEY_SPENDER } });
   if (!resp.ok) throw new Error(`/api/v1/config returned ${resp.status}`);
   const raw = await resp.json();
   return {
@@ -885,7 +885,7 @@ This matters because users sometimes confuse it with their personal TRC-20 balan
 
 ### Caveats
 
-- **Spender vs non-spender key.** Per Transatron docs the Config endpoint expects the spender key, but in practice a non-spender key issued by `POST /api/v1/register` also returns the bound account's balances. Validate with your specific key — if you see `401`/`403`, the key isn't allowed to read this account's config.
+- **Spender key only.** The Config endpoint requires the spender key. Do not call it with the non-spender key, and do not call it from the browser; the frontend asks the backend proxy above.
 - **Cache the result.** A 20–60s TTL is plenty; this endpoint isn't real-time.
 - **Don't poll on every render.** Refresh on auth-state change, after a broadcast has settled (TFN/TFU drop when an account-mode order is charged; a negative instant-payment cashback also debits it), and on a manual reload button. The reply's `user_account_balance_*` is the post-fee balance only when `is_final` is `true`.
 
@@ -936,7 +936,7 @@ Use `useCreateWallet` and `useSignRawHash` from `@privy-io/react-auth/extended-c
 
 ## Implementation Checklist
 
-1. Set all five env vars (`PRIVY_APP_ID`, `PRIVY_APP_SECRET`, `PRIVY_WEBHOOK_SIGNING_KEY`, `PRIVY_AUTHORIZATION_KEY`, `TRANSATRON_API_KEY`); decide what happens when Transatron is absent.
+1. Set the env vars from [Environment Setup](#environment-setup) (`PRIVY_APP_ID`, `PRIVY_APP_SECRET`, `PRIVY_WEBHOOK_SIGNING_KEY`, `PRIVY_AUTHORIZATION_KEY`, `TRANSATRON_API_KEY_SPENDER`, `TRANSATRON_API_KEY_NON_SPENDER`, `VITE_TRANSATRON_API_KEY_NON_SPENDER`, `TRANSATRON_API_URL`); decide what happens when Transatron is absent.
 2. Initialize the Privy server client and the Transatron TronWeb client with explicit `providers.HttpProvider` header propagation.
 3. Accept both `privyAuthorizationSignature` (string) and `signaturePayload` (object with `signaturesByPayloadId`) in every signing DTO that can reach a policy-gated wallet.
 4. In the batch executor, route by chain BEFORE any shape-specific filter; keep pre-exec validation outside the status-mutating try/catch.
