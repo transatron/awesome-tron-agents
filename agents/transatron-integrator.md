@@ -511,7 +511,7 @@ const mainReply = (await tronWeb.trx.sendRawTransaction(signedMainTx)) as unknow
 const mainOutcome = classifyBroadcast(mainReply); // Step 1 rules; 'underpriced' → re-quote, new payment
 ```
 
-**Critical: Do NOT wait for or verify the fee deposit on chain before broadcasting the main transaction.** Transatron processes an instant payment and its main transaction as a pair — both must arrive back-to-back. Inserting any verification, polling, or `await getTransactionInfo()` between the two broadcasts breaks the pair and causes Transatron to process them independently, which means the main transaction loses its energy sponsorship. Send both `sendRawTransaction` calls sequentially with no checks in between. Verify the final result only after the main transaction broadcast returns. An instant payment is never part of a bulk, so the bulk charge failure rule ([Step 1](#step-1--classify-the-outcome-this-decides-whether-anything-may-be-rebuilt), rule 8) does not apply to it.
+**Critical: Do NOT wait for or verify the fee deposit on chain before broadcasting the main transaction.** Transatron processes an instant payment and its main transaction as a pair — both must arrive back-to-back. Inserting any verification, polling, or `await getTransactionInfo()` between the two broadcasts breaks the pair and causes Transatron to process them independently, which means the main transaction loses its energy sponsorship. Send both `sendRawTransaction` calls sequentially with no on-chain checks or waits in between (classifying the fee reply you already hold is fine). Verify the final result only after the main transaction broadcast returns. An instant payment is never part of a bulk, so the bulk charge failure rule ([Step 1](#step-1--classify-the-outcome-this-decides-whether-anything-may-be-rebuilt), rule 8) does not apply to it.
 
 **Critical: Both fee and main transactions must use solidified block references.** Use `prepareTransaction()` (see `tron-developer-tronweb`) on both transactions before signing. Without this, micro-forks can cause TAPOS_ERROR and break the back-to-back pair.
 
@@ -706,7 +706,7 @@ After broadcasting, wait 10s for Transatron queue processing, then poll every 5s
 
 **How long to poll.** For an `unknown` outcome (may-still-land, timeout, `SETTLEMENT_PENDING`), keep polling until the transaction's expiration (the one printed in the may-still-land text, else the transaction's own `raw_data.expiration`). Running out of a fixed retry count is **not** a reason to rebuild or re-sign: until its expiration the transaction can still land. After polling, check the order ([Step 2](#step-2--book-the-fee-only-from-is_final-true)).
 
-See `tron-developer-tronweb` for the `waitForConfirmation` implementation.
+See `tron-developer-tronweb` for a `waitForConfirmation` helper; with Transatron, run it at this cadence (10s first wait, 5s interval) and bound it by the transaction's expiration, not a fixed retry count.
 
 ### Fee Priority Order
 

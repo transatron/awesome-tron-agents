@@ -53,7 +53,7 @@ constructor(config: ConfigService, private logger: Logger) {
   this.spenderKey = config.get('TRANSATRON_API_KEY_SPENDER') ?? '';
   this.nonSpenderKey = config.get('TRANSATRON_API_KEY_NON_SPENDER') ?? '';
   this.apiUrl = config.get('TRANSATRON_API_URL') ?? 'https://api.transatron.io';
-  this.enabled = this.nonSpenderKey.length > 0; // non-spender is the minimum for any broadcast
+  this.enabled = this.spenderKey.length > 0 || this.nonSpenderKey.length > 0; // either key enables a broadcast surface
   this.logger.log(`Transatron ${this.enabled ? 'enabled' : 'disabled (no API key)'}`);
 }
 
@@ -321,7 +321,7 @@ export class TransatronClient {
   private readonly logger = new Logger(TransatronClient.name);
   private readonly tron: TronWeb;
   private readonly spenderKey: string;  // server-only; broadcasts (account mode) and Orders reads
-  readonly enabled: boolean;
+  readonly enabled: boolean;           // account-mode surface available (spender key set)
 
   constructor() {
     // This client is the account-mode surface, so it carries the spender key. The instant path
