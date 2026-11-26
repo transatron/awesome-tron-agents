@@ -15,8 +15,8 @@ Specialized Claude Code agents for TRON blockchain development — architecture 
 - [**tron-developer-tronweb**](agents/tron-developer-tronweb.md) — TronWeb SDK: building/signing/broadcasting transactions, wallet integration (TronLink, WalletConnect, Ledger).
 - [**tron-integrator-trc20**](agents/tron-integrator-trc20.md) — TRC-20 tokens: transfer, approve, transferFrom with energy estimation, USDT dynamic penalty handling, operation-specific fallbacks.
 - [**tron-integrator-sunswap**](agents/tron-integrator-sunswap.md) — SunSwap DEX swaps: Smart Exchange Router integration, swap path encoding, TRC-20 approve before swaps, energy estimation for swaps.
-- [**transatron-integrator**](agents/transatron-integrator.md) — Transatron implementation: fee payment modes (account, instant, coupon, delayed), balance replenishment, programmatic registration.
-- [**transatron-integrator-privy**](agents/transatron-integrator-privy.md) — Privy + Transatron implementation: wiring authorization-signature / multi-payload Privy signing to Transatron broadcast, handling Privy webhooks for Tron resource-delegation ops, defensive client wrappers.
+- [**transatron-integrator**](agents/transatron-integrator.md) — Transatron implementation: fee payment modes (account, instant, coupon, delayed), handling broadcast replies and booking the final fee (`is_final` / `order_id`), balance replenishment, programmatic registration.
+- [**transatron-integrator-privy**](agents/transatron-integrator-privy.md) — Privy + Transatron implementation: wiring authorization-signature / multi-payload Privy signing to Transatron broadcast, handling broadcast replies and the final fee, handling Privy webhooks for Tron resource-delegation ops, defensive client wrappers.
 - [**tron-integrator-shieldedusdt**](agents/tron-integrator-shieldedusdt.md) — Shielded TRC-20 privacy: zk-SNARK proof generation, mint/transfer/burn flows, note scanning.
 - [**tron-integrator-usdt0**](agents/tron-integrator-usdt0.md) — USDT0 (LayerZero OFT) cross-chain transfers: quoting fees, building send transactions, call_value handling for bridging to Ethereum/Solana/TON.
 
@@ -120,5 +120,5 @@ For the best experience, pair these agents with the [TRON MCP server](https://gi
 ## References
 
 - [TronWeb SDK](https://tronweb.network/docu/docs/intro/)
-- [Transatron](https://docs.transatron.io)
+- [Transatron](https://docs.transatron.io) — behaviour changes are listed in the [release notes](https://docs.transatron.io/category/release-notes)
 - [TRON Developer Docs](https://developers.tron.network/docs/)

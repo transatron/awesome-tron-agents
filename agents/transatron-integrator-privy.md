@@ -13,6 +13,22 @@ Key references:
 - Privy server SDK: https://docs.privy.io/guide/server
 - Privy authorization signatures: https://docs.privy.io/guide/server/wallets/usage/authorization-signatures
 - Privy webhooks: https://docs.privy.io/guide/server/webhooks
+- Transatron release notes — read these before you rely on remembered behaviour:
+  - https://docs.transatron.io/release_notes/BroadcastReplyIsFinal — `is_final`, `order_id`, node result codes, may-still-land, signed instant-payment cashback
+  - https://docs.transatron.io/release_notes/BulkChargeFailure — the reply when charging a bulk fails
+  - https://docs.transatron.io/release_notes/DelayedTransactionsOffByDefault — delayed transactions on new keys
+  - https://docs.transatron.io/release_notes/SingleUseCoupons — coupons pay for one transaction
+
+## Rules You Must Follow
+
+These are the same Transatron rules as in `transatron-integrator`. Only the Privy wiring differs.
+
+1. **Integration order:** account → instant → coupons. Do not propose coupons unless the user describes a coupon integration.
+2. **Know the key type before you propose an Orders lookup.** Ask the user, or detect it from the code: which env var / `TRANSATRON-API-KEY` header the broadcasting TronWeb instance uses. Only a **Spender** key can read `GET /api/v1/orders`; a Non-Spender key gets `401`.
+3. **Book the fee only from `is_final: true`.** Otherwise read it on the backend from `GET /api/v1/orders` with the Spender key: by `order_id`, or by `?search=<txid>` once landed. Never show the reply's fee as the final charge unless `is_final` is `true`. Code and steps: [Broadcast Replies](#broadcast-replies-outcome-fees-and-retries).
+4. **Instant payments on a Non-Spender key:** the end user pays exactly the instant payment; settlement never refunds or charges them more. The difference is cashback to the API key owner, read with the Spender key on the backend (`cashback_amount_trx`), and it can be negative. If the payment does not land, nothing is charged. Do not add an `/orders` call to the non-spender path or the browser.
+5. **Never rebroadcast or ask Privy to re-sign** because `is_final` is `false`/missing, a reply is `SETTLEMENT_PENDING`, or every broadcast route failed (may-still-land). Poll the txid until its expiration, then check the order. The one case that needs a **new user signature** is a bulk charge failure with bypass off: build new transactions and have them signed again; never resend the same signed transaction (Step 1, rule 8).
+6. **Delayed transactions are off by default for new keys;** existing keys keep their setting. Ask before you wire anything that expects `PENDING` replies or calls flush.
 
 ## Environment Setup
 
@@ -37,7 +53,7 @@ constructor(config: ConfigService, private logger: Logger) {
   this.spenderKey = config.get('TRANSATRON_API_KEY_SPENDER') ?? '';
   this.nonSpenderKey = config.get('TRANSATRON_API_KEY_NON_SPENDER') ?? '';
   this.apiUrl = config.get('TRANSATRON_API_URL') ?? 'https://api.transatron.io';
-  this.enabled = this.nonSpenderKey.length > 0; // non-spender is the minimum for any broadcast
+  this.enabled = this.spenderKey.length > 0 || this.nonSpenderKey.length > 0; // either key enables a broadcast surface
   this.logger.log(`Transatron ${this.enabled ? 'enabled' : 'disabled (no API key)'}`);
 }
 
@@ -108,7 +124,7 @@ export async function getAccountConfig() {
 
 - **Don't put the spender key in any `VITE_`-prefixed env var.** `VITE_*` ships to the bundle. The bundle is public.
 - **Don't use the spender key for instant-mode broadcasts.** It works, but you've now leaked spender-grade auth to a code path that didn't need it. Rotate the keys after.
-- **Picking the wrong header for `/api/v1/config`** silently 401s with non-spender keys at some accounts and quietly returns balances at others. Always use the spender key here so behaviour is consistent.
+- **Picking the wrong header for `/api/v1/config`.** The endpoint requires the spender key. Always send `TRANSATRON_API_KEY_SPENDER` here, from the backend.
 - **`https://api.transatron.io/<key>` URL-embedding** is an authentication mechanism, not a CDN URL. The full URL ends up in the browser's request log; if you accidentally use the spender key here, treat it as compromised and rotate immediately.
 
 ## Privy Client Initialization
@@ -285,7 +301,7 @@ async submitSignedIntent(dto: SignIntentDto) {
   // Attach to the pre-built TRON transaction
   const signedTx = this.tronClient.attachSignatures(intent.rawTx, signatures);
 
-  // Broadcast through Transatron — payment mode determined by which key is configured
+  // Broadcast through Transatron — account mode, spender key (instant mode: instantBroadcast below)
   return this.transatronClient.broadcast(signedTx);
 }
 ```
@@ -304,16 +320,18 @@ const TRANSATRON_URL = process.env.TRANSATRON_API_URL ?? 'https://api.transatron
 export class TransatronClient {
   private readonly logger = new Logger(TransatronClient.name);
   private readonly tron: TronWeb;
-  private readonly apiKey: string;
-  readonly enabled: boolean;
+  private readonly spenderKey: string;  // server-only; broadcasts (account mode) and Orders reads
+  readonly enabled: boolean;           // account-mode surface available (spender key set)
 
   constructor() {
-    this.apiKey = process.env.TRANSATRON_API_KEY ?? '';
-    this.enabled = this.apiKey.length > 0;
+    // This client is the account-mode surface, so it carries the spender key. The instant path
+    // broadcasts through the non-spender instance (see "Two backend TronWeb instances").
+    this.spenderKey = process.env.TRANSATRON_API_KEY_SPENDER ?? '';
+    this.enabled = this.spenderKey.length > 0;
 
     const hp = (url: string) =>
       new providers.HttpProvider(url, 60_000, '', '', {
-        'TRANSATRON-API-KEY': this.apiKey,
+        'TRANSATRON-API-KEY': this.spenderKey,
       });
 
     this.tron = new TronWeb({
@@ -326,24 +344,26 @@ export class TransatronClient {
   get isEnabled() { return this.enabled; }
 
   /**
-   * Defensive GET wrapper. Transatron API responses occasionally return
-   * a single object where an array is expected (e.g. /api/v1/orders
-   * with a strict filter). Always coerce to array before `.find()`/`.filter()`.
+   * GET /api/v1/orders returns an envelope { orders: [...], pagination }, not a bare array.
+   * Read `orders` from the envelope and guard it; never Array.isArray() the envelope itself
+   * (that always yields [] and makes every charge look like "nothing charged").
+   * Requires the SPENDER key — a non-spender key gets 401.
    */
-  private async getJson<T>(path: string): Promise<T> {
-    const res = await fetch(`${TRANSATRON_URL}${path}`, {
-      headers: { 'TRANSATRON-API-KEY': this.apiKey },
+  async getOrders(filter?: Record<string, string>): Promise<{ status: number; orders: TransatronOrder[] }> {
+    const qs = filter ? `?${new URLSearchParams(filter).toString()}` : '';
+    const res = await fetch(`${TRANSATRON_URL}/api/v1/orders${qs}`, {
+      headers: { 'TRANSATRON-API-KEY': this.spenderKey },
     });
-    if (!res.ok) throw new Error(`Transatron ${path} ${res.status}`);
-    return (await res.json()) as T;
+    if (res.status === 401) throw new Error('GET /api/v1/orders needs the Transatron spender key');
+    if (res.status === 404) return { status: 404, orders: [] }; // ?search=: hash unknown or not mined yet
+    if (!res.ok) throw new Error(`Transatron /api/v1/orders ${res.status}`);
+    const raw = (await res.json()) as { orders?: unknown };
+    return { status: res.status, orders: Array.isArray(raw.orders) ? (raw.orders as TransatronOrder[]) : [] };
   }
 
-  async getOrders(filter?: Record<string, string>): Promise<TransatronOrder[]> {
-    const qs = filter
-      ? `?${new URLSearchParams(filter).toString()}`
-      : '';
-    const raw = await this.getJson<unknown>(`/api/v1/orders${qs}`);
-    return Array.isArray(raw) ? (raw as TransatronOrder[]) : [];
+  /** Flush a sender's delayed queue — only when Delayed transactions is enabled on this key. */
+  async flushPendingTxs(address: string) {
+    return this.tron.fullNode.request('api/v1/pendingtxs/flush', { address }, 'post');
   }
 
   async estimateFeeLimit(params: {
@@ -365,15 +385,120 @@ export class TransatronClient {
     return Math.ceil(energy_used * energyFee * 1.001);
   }
 
+  /** Returns the reply AND its outcome. Never throw on `result: false` — it can mean "may still land". */
   async broadcast(signedTx: any) {
-    return this.tron.trx.sendRawTransaction(signedTx);
+    const reply = (await this.tron.trx.sendRawTransaction(signedTx)) as unknown as TransatronBroadcastResult;
+    return { reply, outcome: classifyBroadcast(reply) };
   }
 }
 ```
 
 Notes:
 - `energyFee` default above is `420` (the current TRON mainnet value at time of writing) rather than the deprecated `100`. Always prefer the live chain parameter.
-- The `Array.isArray(raw) ? raw : []` guard is a **hard requirement** anywhere you call `.find()` / `.filter()` / `.map()` on a Transatron list response.
+- Read list responses from their envelope (`raw.orders`) and guard that field with `Array.isArray(...)` before `.find()` / `.filter()` / `.map()`.
+- `classifyBroadcast`, `readCharge` and `TransatronBroadcastResult` are in [Broadcast Replies](#broadcast-replies-outcome-fees-and-retries).
+
+## Broadcast Replies: Outcome, Fees and Retries
+
+A `/wallet/broadcasttransaction` reply is the TRON node's reply plus a `transatron` object. The top-level `code` and `message` are the **node's** result (`message` is hex-encoded). `transatron.code` is **Transatron's** decision code: `CHARGED`, `FREE`, `PENDING`, `LIMIT_EXCEED`, `NOT_ENOUGH_FUNDS`, `INSTANT_PAYMENT_UNDERPRICED`, `ERROR`, `SETTLEMENT_PENDING`. Follow these steps on the backend for every reply.
+
+### Step 1 — Classify the outcome (this decides whether Privy may sign again)
+
+Apply in this order:
+1. **Decode `message` first.** If it contains `Outcome unknown or the tx may still land`, the outcome is unknown **whatever the `code` is**. Do not rebuild, do not ask Privy for a new signature, do not rebroadcast. Poll the txid until the expiration printed in the text (ISO-8601 UTC); parse only that prefix and the expiration.
+2. **Timeout.** `OTHER_ERROR` / `NOT_ENOUGH_EFFECTIVE_CONNECTION` with `Timeout waiting for broadcast result` is also unknown: same as 1.
+3. **`transatron.code` `SETTLEMENT_PENDING`** (empty top-level `code`, zero fees): not an error, and the transaction may still land. Poll, then read the charge from Orders.
+4. **`transatron.code` `PENDING`:** a delayed transaction was buffered. No `order_id`, no `is_final`.
+5. **`INSTANT_PAYMENT_UNDERPRICED`:** the user transaction was **not broadcast**. Re-estimate, re-create the payment transaction, and try again.
+6. **`result: true` / `SUCCESS`:** accepted. Poll the txid.
+7. **`DUP_TRANSACTION_ERROR`:** Transatron or the network already has this transaction, and it is not processed again. This is not an "accepted" reply. Do not rebuild and do not ask Privy for a new signature. On the backend, read the outcome from Orders with the Spender key (by `transatron.order_id`, else by `?search=<txid>`) and poll the txid. One exception: if this transaction's earlier reply was a bulk charge failure with bypass off (rule 8), it was never broadcast, so rebuild it and collect a new signature. The `transatron` object can be full, hold **only** `order_id`, or be absent, so never assume `transatron.code` exists.
+8. **Bulk charge failure:** `transatron.code` `ERROR` + top-level `OTHER_ERROR`, with no may-still-land text. Nothing was charged and, with bypass off, nothing was broadcast. Build new transactions and ask for a **new user signature** (a new authorization signature on server-signed flows), then send them. **Never resend the same signed transaction:** it is answered `DUP_TRANSACTION_ERROR` and is not processed. Rebuild with new `raw_data` (fresh reference block and expiration via `prepareTransaction`); signing the stored `rawTx` again gives the same txid. With bypass on they went out without Transatron's resources, so the sender paid the network fee, and the top-level `code` is the node's result; never re-sign them. An instant payment is never part of a bulk, so this rule does not apply to it.
+9. **Other `OTHER_ERROR` / `NOT_ENOUGH_EFFECTIVE_CONNECTION`:** a request error, never broadcast. Fix the request.
+10. **Rejections** (`SIGERROR`, `TOO_BIG`, `CONTRACT_VALIDATE_ERROR`, `BANDWITH_ERROR`, `CONTRACT_EXE_ERROR`, `TRANSACTION_EXPIRATION_ERROR`, `TAPOS_ERROR`): final. Fix the cause; only now may Privy sign a rebuilt transaction.
+
+A low account shows as `transatron.code` `LIMIT_EXCEED` or `NOT_ENOUGH_FUNDS`. Transatron then bypasses the transaction (forwards it without its resources), and the node's outcome above still decides what happened to it. A repeated broadcast of a transaction Transatron already has is answered `DUP_TRANSACTION_ERROR` (with `transatron.order_id` when the order is known) and is not processed again. Read the outcome from `/api/v1/orders`.
+
+### Step 2 — Book the fee (backend, Spender key)
+
+1. `transatron.is_final === true` → the reply's `tx_fee_*` figures are final: book them.
+2. Otherwise they are an estimate. Read `GET /api/v1/orders?order_id=<transatron.order_id>`, or `?search=<txid>` once the transaction has landed.
+3. Order `is_final` `true` or `null` → final: book `amount_trx` (sun), or the transaction's `order_transactions` entry for a shared bulk order. `false` → still settling (cashback shows `0`): query again later.
+   **Settlement timing:** charged when it settles, typically within about 10 seconds of the transfer landing on chain; an account with several transfers in flight at the same moment can see this take longer, up to a few minutes; after a service interruption it can take longer. The amount is the settled amount, charged once. ([release note](https://docs.transatron.io/release_notes/BroadcastReplyIsFinal))
+4. An empty `order_id` result right after the broadcast can mean the order is not recorded yet. A `search` `404` means the hash is not mined yet. Once landed, no order means nothing was charged.
+5. Key bookkeeping on `order_id`, never on tx hash.
+
+Non-Spender / instant path: no Orders lookup from that path or the browser. The user pays exactly the instant payment; the owner's signed cashback is read on the backend with the Spender key (rule 4).
+
+Reply modes: by default the reply is not final. Wait-for-final is enabled per key on request to Transatron support, and a held reply can still return `is_final: false`. Always check `is_final`.
+
+### Code
+
+Types follow the documented reply; structure follows `broadcastTransaction` in `transatron/examples_tronweb`.
+
+```typescript
+interface TransatronBroadcastExtra {
+  code?: string; message?: string;              // code absent on a DUP reply holding only order_id
+  tx_fee_rtrx_account?: number; tx_fee_rusdt_account?: number;
+  tx_fee_rtrx_instant?: number; tx_fee_rusdt_instant?: number;
+  tx_fee_burn_trx?: number;
+  user_account_balance_rtrx?: number; user_account_balance_rusdt?: number;
+  is_final?: boolean;                            // only `true` means final
+  order_id?: string;
+}
+interface TransatronBroadcastResult {
+  result?: boolean; txid: string;
+  code?: string; message?: string;               // node-native; message hex-encoded
+  transatron?: TransatronBroadcastExtra;
+}
+interface TransatronOrder {
+  order_id: string; amount_trx: number; cashback_amount_trx: number; charge_token: string;
+  transactions: string[];
+  order_transactions: { tx_id: string; amount_trx: number }[] | null;
+  is_final: boolean | null;                      // true or null = final; false = settling
+}
+
+type BroadcastOutcome =
+  | { kind: 'accepted' } | { kind: 'duplicate' } | { kind: 'unknown'; pollUntil?: string } | { kind: 'pending' }
+  | { kind: 'underpriced' } | { kind: 'not_broadcast_rebuild' } | { kind: 'request_error' }
+  | { kind: 'rejected'; code: string };
+
+const MAY_STILL_LAND = 'Outcome unknown or the tx may still land';
+const ISO_UTC = /\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z/;
+const decodeMessage = (hex?: string) => (hex ? Buffer.from(hex, 'hex').toString('utf8') : '');
+
+export function classifyBroadcast(r: TransatronBroadcastResult): BroadcastOutcome {
+  const text = decodeMessage(r.message);
+  const tt = r.transatron;
+  if (text.includes(MAY_STILL_LAND)) {
+    return { kind: 'unknown', pollUntil: text.slice(text.indexOf(MAY_STILL_LAND)).match(ISO_UTC)?.[0] };
+  }
+  const transportCode = r.code === 'OTHER_ERROR' || r.code === 'NOT_ENOUGH_EFFECTIVE_CONNECTION';
+  if (transportCode && text.includes('Timeout waiting for broadcast result')) return { kind: 'unknown' };
+  if (tt?.code === 'SETTLEMENT_PENDING') return { kind: 'unknown' };
+  if (tt?.code === 'PENDING') return { kind: 'pending' };
+  if (tt?.code === 'INSTANT_PAYMENT_UNDERPRICED') return { kind: 'underpriced' };
+  if (r.result === true || r.code === 'SUCCESS') return { kind: 'accepted' };
+  if (r.code === 'DUP_TRANSACTION_ERROR') return { kind: 'duplicate' }; // not processed again: read Orders, poll
+  if (r.code === 'OTHER_ERROR' && tt?.code === 'ERROR') return { kind: 'not_broadcast_rebuild' }; // new tx + new signature
+  if (transportCode) return { kind: 'request_error' };
+  return { kind: 'rejected', code: r.code ?? 'UNKNOWN' };
+}
+
+/** Step 2 — backend only, spender-keyed client. */
+export async function readCharge(client: TransatronClient, reply: TransatronBroadcastResult, txLanded: boolean) {
+  const tt = reply.transatron;
+  if (tt?.is_final === true) return { status: 'final_from_reply' as const, fee: tt };
+  const filter = tt?.order_id ? { order_id: tt.order_id } : txLanded ? { search: reply.txid } : null;
+  if (!filter) return { status: 'not_landed' as const };
+  const { status, orders } = await client.getOrders(filter);
+  if (status === 404) return { status: 'not_landed' as const };
+  const order = orders[0];
+  if (!order) return { status: txLanded ? ('no_charge' as const) : ('not_recorded_yet' as const) };
+  if (order.is_final === false) return { status: 'settling' as const };
+  const perTx = order.order_transactions?.find((t) => t.tx_id === reply.txid)?.amount_trx;
+  return { status: 'final' as const, order, txAmountSun: perTx ?? order.amount_trx };
+}
+```
 
 ### Multisig transactions need no special wrapper handling
 
@@ -402,7 +527,7 @@ export const transatronTron = new TronWeb({
   eventServer:  httpProvider(env.TRANSATRON_API_URL, nonSpenderHeaders),
 });
 
-// Account-mode broadcast surface (Transatron deducts from TFN/TFU on broadcast).
+// Account-mode broadcast surface (Transatron charges TFN/TFU when the order settles).
 // Spender key on ALL THREE providers — silently falls back to non-spender behaviour
 // if you only set it on, say, eventServer.
 export const transatronTronSpender = new TronWeb({
@@ -418,16 +543,34 @@ The transaction is identical to an instant-mode main tx; only the broadcast surf
 
 ```typescript
 // backend /broadcast — account mode
-const raw = await transatronTronSpender.trx.sendRawTransaction(mainTx);
-if (!isBroadcastOk(raw)) {
-  const tcode = (raw as any).transatron?.code;
-  const insufficient = tcode === 'INSUFFICIENT_BALANCE' || tcode === 'ACCOUNT_BALANCE_TOO_LOW';
-  return res.status(insufficient ? 402 : 502).json({
-    error: insufficient ? 'transatron_insufficient_balance' : 'main_broadcast_failed',
-    transatronCode: tcode,
-    transatronMessage: decodeMessage((raw as any).transatron?.message),
+const raw = (await transatronTronSpender.trx.sendRawTransaction(mainTx)) as unknown as TransatronBroadcastResult;
+const outcome = classifyBroadcast(raw);
+const tcode = raw.transatron?.code;
+// LIMIT_EXCEED / NOT_ENOUGH_FUNDS: the Transatron account is too low and the tx was bypassed (operator top-up)
+const accountLow = tcode === 'LIMIT_EXCEED' || tcode === 'NOT_ENOUGH_FUNDS';
+
+if (outcome.kind === 'not_broadcast_rebuild') {
+  // Bulk charge failure, bypass off: nothing charged, never broadcast. The browser builds a NEW
+  // transaction (fresh ref block via prepareTransaction) and the user signs it again.
+  // Never resend mainTx: the same signed tx is answered DUP_TRANSACTION_ERROR and is not processed.
+  return res.status(409).json({ error: 'not_broadcast_rebuild_and_sign', outcome, txid: raw.txid });
+}
+if (outcome.kind === 'rejected' || outcome.kind === 'request_error') {
+  // Definitive: the browser may build and sign a new transaction
+  return res.status(accountLow ? 402 : 502).json({
+    error: accountLow ? 'transatron_account_low' : 'main_broadcast_failed',
+    outcome, transatronCode: tcode,
+    transatronMessage: decodeMessage(raw.transatron?.message),
   });
 }
+// accepted | duplicate | unknown | pending: the tx is out (or may be). The browser must NOT re-sign.
+// duplicate: not processed again; read the outcome with readCharge() and poll the txid.
+return res.json({
+  txid: raw.txid,
+  orderId: raw.transatron?.order_id ?? null,  // book later via readCharge() with the spender key
+  isFinal: raw.transatron?.is_final === true,  // fee in the reply is final only when true
+  outcome, accountLow,
+});
 ```
 
 Frontend just signs the main tx and POSTs it — no fee tx, no `/deposit-address` round-trip.
@@ -437,14 +580,36 @@ Frontend just signs the main tx and POSTs it — no fee tx, no `/deposit-address
 ```typescript
 // backend /broadcast — instant mode (or unify by adding a `mode` param)
 async function instantBroadcast(feeTx: any, mainTx: any) {
-  const feeResult = await transatronTron.trx.sendRawTransaction(feeTx);
-  if (!isBroadcastOk(feeResult)) throw broadcastError('fee', feeResult);
-  // No verification, no polling — Transatron requires back-to-back arrival.
-  const mainResult = await transatronTron.trx.sendRawTransaction(mainTx);
-  if (!isBroadcastOk(mainResult)) throw broadcastError('main', mainResult);
-  return { feeTxid: feeResult.txid, mainTxid: mainResult.txid };
+  const feeReply = (await transatronTron.trx.sendRawTransaction(feeTx)) as unknown as TransatronBroadcastResult;
+  const fee = classifyBroadcast(feeReply);       // reads the reply in hand; no network call
+  switch (fee.kind) {
+    case 'accepted':
+      break;                                      // the only outcome that sends the pair's main tx
+    case 'rejected':
+    case 'request_error':
+    case 'underpriced':
+    case 'not_broadcast_rebuild':                 // not expected: an instant payment is never part of a bulk
+      throw broadcastError('fee', feeReply);      // definitive, not broadcast: rebuild both, new signatures
+    case 'unknown':
+    case 'duplicate':
+    case 'pending':
+      // The payment is out or may still land. Never ask Privy to sign a second payment for this send.
+      // Poll feeReply.txid (until fee.pollUntil when present), then decide.
+      throw broadcastError('fee_outcome_unknown', feeReply);
+    default: {
+      const unhandled: never = fee;
+      throw new Error(`Unhandled fee outcome ${JSON.stringify(unhandled)}`);
+    }
+  }
+  // No verification, no polling — Transatron requires the pair to arrive back-to-back.
+  const mainReply = (await transatronTron.trx.sendRawTransaction(mainTx)) as unknown as TransatronBroadcastResult;
+  const main = classifyBroadcast(mainReply);
+  // main 'unknown' | 'duplicate' → poll mainReply.txid; do not re-sign. 'underpriced' → re-quote, new payment, try again.
+  return { feeTxid: feeReply.txid, mainTxid: mainReply.txid, fee, main, orderId: mainReply.transatron?.order_id };
 }
 ```
+
+The fee transaction and the main transaction are a pair, never a bulk: only an `accepted` fee reply sends the main transaction. The frontend must treat `fee_outcome_unknown` and a `main.kind` of `unknown` as "do not retry with a new signature". Show "pending" and poll the txid. The account-mode `not_broadcast_rebuild_and_sign` error is the opposite: nothing was broadcast, so the frontend rebuilds the transaction and asks the user to sign it again. The user pays exactly the instant payment; there is no final fee to show them (rule 4).
 
 Frontend in instant mode also calls `/deposit-address` and `/fee-quote`, builds the fee tx as `transactionBuilder.sendTrx(depositAddress, quote.feeRtrxInstant, fromBase58)`, prepares it with the same `prepareTransaction` helper, and signs both transactions through Privy before POSTing both signed payloads.
 
@@ -505,6 +670,16 @@ const fee =
   quote.tx_fee_rtrx_instant ?? quote.tx_fee_rtrx_account ?? null;
 ```
 
+This is a quote for display before signing. After the broadcast, show a fee as charged only when the reply's `is_final` is `true`; in account mode, otherwise show it as an estimate until the backend has read the order (Step 2).
+
+### Coupon mode (coupon integrations only)
+
+Only when the user describes a coupon integration. The backend issues coupons with the spender key; the Privy-signed transaction carries the coupon id in its root `coupon` field and is broadcast with the non-spender key. Coupons are **single-use**:
+1. Issue **one coupon per transaction** (`POST api/v1/coupon`; the response's `coupon.id`), with `rtrx_limit` from the quote plus 10–15%. Never send a spent coupon id with a new transaction.
+2. Before broadcasting, especially after the user paused in a Privy prompt, check with `GET api/v1/coupon/<id>` that the coupon is unspent (no `tx_id`), has not expired (`valid_to`), and covers a fresh estimate. Otherwise issue a new coupon.
+3. A spent, expired or too-low coupon is handled as if there were none. The fee is charged to the business's internal balance, or the reply is `LIMIT_EXCEED` / `NOT_ENOUGH_FUNDS` if that balance cannot cover it, so keep the balance funded.
+4. A coupon-paid reply is `transatron.code` `FREE`. The backend reads the charge with the spender key by `order_id` or tx hash (Step 2). Coupon code lives in `transatron-integrator`.
+
 ## Batch Orchestration (`signBatch` → `executeBatch`)
 
 When the backend needs to sign and execute N intents in one transaction, the executor must (a) accept both signature shapes, (b) route by chain BEFORE any shape-specific filter, and (c) validate prerequisites OUTSIDE the try/catch that flips the batch to `failed`.
@@ -562,12 +737,23 @@ private async executeTronBatch(intents: Intent[]) {
       signature: sigs.map((s) => s.replace(/^0x/, '')),
     };
 
-    await this.transatron.broadcast(signedTx);
-    await sleep(2_000); // Transatron pacing for fire-and-forget batches
+    const { reply, outcome } = await this.transatron.broadcast(signedTx);
+    // 'not_broadcast_rebuild' (bulk charge failure, bypass off): nothing charged, never broadcast.
+    // Never resend signedTx (it is answered DUP_TRANSACTION_ERROR and is not processed); a retry
+    // rebuilds intent.rawTx with a fresh ref block and collects a NEW Privy signature.
+    // Record per intent: txid, order_id (shared across a bulk), outcome.
+    // 'unknown' intents are polled until expiration — never re-signed, even if the batch is retried.
+    await this.repo.recordBroadcast(intent.id, {
+      txid: reply.txid,
+      orderId: reply.transatron?.order_id ?? null,
+      isFinal: reply.transatron?.is_final === true,
+      outcome,
+    });
+    await sleep(2_000); // Transatron pacing between sends
   }
 
-  // Optional: force immediate processing for delayed-mode batches
-  await this.transatron.flushPendingTxs();
+  // Only if Delayed transactions is enabled on this key (off by default for new keys)
+  if (this.delayedEnabledOnKey) await this.transatron.flushPendingTxs(this.senderAddress);
 }
 ```
 
@@ -576,6 +762,7 @@ Lock-in rules for the batch executor:
 1. **Routing by chain runs first.** No shape-based filter may precede the chain-routing step.
 2. **Pre-exec validation lives outside the status-mutating try/catch.** A missing signature is a client error, not a terminal batch failure.
 3. **Per-intent errors don't kill the batch** unless the product explicitly wants all-or-nothing semantics; consider capturing per-intent status and a partial-success state.
+4. **A broadcast intent is never re-signed by a batch retry.** A retry rebuilds and re-signs only intents that were never broadcast or were definitively refused: a recorded `not_broadcast_rebuild` (bulk charge failure, bypass off), `rejected` or `request_error`. It builds a new transaction (new `raw_data`) and collects a new Privy signature; it never resends the same signed transaction, which is answered `DUP_TRANSACTION_ERROR` and is not processed. An `unknown` intent (may still land, timeout, `SETTLEMENT_PENDING`) is polled until its expiration; then its order is checked. Book fees per `order_id` with `readCharge()` on the spender key.
 
 ## Privy Webhook — Guard Against Resource-Op Deposits
 
@@ -637,7 +824,7 @@ Sometimes the UI needs to surface "how much fee budget is left on the Transatron
 
 ### Source of truth
 
-`GET /api/v1/config` on the Transatron API, with `TRANSATRON-API-KEY: <key>` header. Response includes:
+`GET /api/v1/config` on the Transatron API, with the spender key in the `TRANSATRON-API-KEY` header (the endpoint requires the spender key). Response includes:
 
 | Field | Meaning | Decimals |
 |-------|---------|----------|
@@ -653,7 +840,7 @@ The API key must stay on the server. Pattern: **backend proxies the call**, fron
 // backend — transatron.ts
 export async function getAccountConfig() {
   const url = `${env.TRANSATRON_API_URL.replace(/\/$/, '')}/api/v1/config`;
-  const resp = await fetch(url, { headers: { 'TRANSATRON-API-KEY': env.TRANSATRON_API_KEY } });
+  const resp = await fetch(url, { headers: { 'TRANSATRON-API-KEY': env.TRANSATRON_API_KEY_SPENDER } });
   if (!resp.ok) throw new Error(`/api/v1/config returned ${resp.status}`);
   const raw = await resp.json();
   return {
@@ -698,9 +885,9 @@ This matters because users sometimes confuse it with their personal TRC-20 balan
 
 ### Caveats
 
-- **Spender vs non-spender key.** Per Transatron docs the Config endpoint expects the spender key, but in practice a non-spender key issued by `POST /api/v1/register` also returns the bound account's balances. Validate with your specific key — if you see `401`/`403`, the key isn't allowed to read this account's config.
+- **Spender key only.** The Config endpoint requires the spender key. Do not call it with the non-spender key, and do not call it from the browser; the frontend asks the backend proxy above.
 - **Cache the result.** A 20–60s TTL is plenty; this endpoint isn't real-time.
-- **Don't poll on every render.** Refresh on auth-state change, after a successful broadcast (TFN/TFU drop after instant-mode fees), and on a manual reload button.
+- **Don't poll on every render.** Refresh on auth-state change, after a broadcast has settled (TFN/TFU drop when an account-mode order is charged; a negative instant-payment cashback also debits it), and on a manual reload button. The reply's `user_account_balance_*` is the post-fee balance only when `is_final` is `true`.
 
 ## Common Pitfalls (and How to Detect Them)
 
@@ -720,13 +907,13 @@ This matters because users sometimes confuse it with their personal TRC-20 balan
 
 **Fix.** Add the contract-type guard shown above, inside the webhook service, before any ledger / AML call. Backfill by replaying recent webhook events if the bug has been in production.
 
-### 3. Non-array Transatron response → `x.find is not a function`
+### 3. Orders envelope treated as an array → every charge reads as "nothing charged"
 
-**Symptom.** Reconciliation workers crash with `TypeError: orders.find is not a function` after running happily for weeks.
+**Symptom.** Either reconciliation workers crash with `TypeError: orders.find is not a function`, or (after a naive fix) every order lookup returns `[]`, and fees book as zero.
 
-**Root cause.** `/api/v1/orders` (and similar endpoints) return an array when multiple orders match a filter, but sometimes return a single object — typically when the query narrows to exactly one result.
+**Root cause.** `GET /api/v1/orders` always returns an envelope: `{ "orders": [...], "pagination": {...} }`, with 0 or 1 order for `?order_id=` / `?search=`. Calling `.find()` on the envelope crashes. Coercing the envelope with `Array.isArray(raw) ? raw : []` always yields `[]`, and "no order" is then misread as "nothing charged".
 
-**Fix.** In the Transatron client, coerce with `Array.isArray(raw) ? raw : []` before returning. Never let a raw Transatron response bubble up unguarded.
+**Fix.** Read `raw.orders` and guard that field: `Array.isArray(raw.orders) ? raw.orders : []`. Call with the spender key (a non-spender key gets `401`). Handle the `404` that `?search=` returns for a not-yet-mined hash. See `getOrders()` in the Transatron Client above.
 
 ### 4. TRON wallet "doesn't exist" because `useWallets()` is the wrong source
 
@@ -749,18 +936,21 @@ Use `useCreateWallet` and `useSignRawHash` from `@privy-io/react-auth/extended-c
 
 ## Implementation Checklist
 
-1. Set all five env vars (`PRIVY_APP_ID`, `PRIVY_APP_SECRET`, `PRIVY_WEBHOOK_SIGNING_KEY`, `PRIVY_AUTHORIZATION_KEY`, `TRANSATRON_API_KEY`); decide what happens when Transatron is absent.
+1. Set the env vars from [Environment Setup](#environment-setup) (`PRIVY_APP_ID`, `PRIVY_APP_SECRET`, `PRIVY_WEBHOOK_SIGNING_KEY`, `PRIVY_AUTHORIZATION_KEY`, `TRANSATRON_API_KEY_SPENDER`, `TRANSATRON_API_KEY_NON_SPENDER`, `VITE_TRANSATRON_API_KEY_NON_SPENDER`, `TRANSATRON_API_URL`); decide what happens when Transatron is absent.
 2. Initialize the Privy server client and the Transatron TronWeb client with explicit `providers.HttpProvider` header propagation.
 3. Accept both `privyAuthorizationSignature` (string) and `signaturePayload` (object with `signaturesByPayloadId`) in every signing DTO that can reach a policy-gated wallet.
 4. In the batch executor, route by chain BEFORE any shape-specific filter; keep pre-exec validation outside the status-mutating try/catch.
-5. Pick the payment mode per signing surface — server authorization signatures pair with account/delayed; client embedded-wallet signing pairs with instant/coupon.
+5. Pick the payment mode per signing surface, in the order account → instant → coupons. Server authorization signatures pair with account (plus delayed, if enabled on the key); client embedded-wallet signing pairs with account (backend broadcast with the spender key) or instant. Coupons only for a described coupon integration.
 6. Use `triggerConstantContract` + the live `getEnergyFee` chain parameter for `feeLimit`; never hardcode `100` or `420`.
-7. Wrap every Transatron list endpoint with `Array.isArray(x) ? x : []`.
+7. Read `GET /api/v1/orders` from its envelope (`raw.orders`, guarded with `Array.isArray`) using the spender key; never coerce the envelope itself.
 8. In the Privy webhook handler, short-circuit on `DelegateResourceContract`, `UnDelegateResourceContract`, `FreezeBalanceV2Contract`, `UnfreezeBalanceV2Contract` before the ledger / AML / notify pipeline.
 9. For instant-mode broadcasts: send fee tx and main tx back-to-back, no `getTransactionInfo` / no polling in between. Use `prepareTransaction` on BOTH tx.
-10. Gate delayed-mode flows to server-side signing paths; never let a short-lived client Privy session wait in Transatron's queue.
+10. Gate delayed-mode flows to server-side signing paths; never let a short-lived client Privy session wait in Transatron's queue. Ask whether Delayed transactions is enabled on the key (off by default for new keys; existing keys keep their setting) before calling flush or expecting `PENDING`.
 11. Verify Privy webhook signatures with `PRIVY_WEBHOOK_SIGNING_KEY` and keep it enabled even while debugging resource-op detection.
 12. Add unit tests that feed both signature shapes through the batch executor and assert the Tron branch is reached; add a webhook test that feeds a `DelegateResourceContract` event and asserts ledger/AML/notify are NOT called.
+13. Classify every broadcast reply with `classifyBroadcast()`. Never rebroadcast or request a new Privy signature because `is_final` is `false`/missing, a reply is `SETTLEMENT_PENDING`, or every route failed: poll the txid until its expiration, then check the order. After a bulk charge failure with bypass off, build new transactions and collect a new Privy signature; never resend the same signed tx (it is answered `DUP_TRANSACTION_ERROR` and is not processed).
+14. Book fees only from `is_final: true`; otherwise use `readCharge()` on the backend with the spender key (`order_id`, or `?search=<txid>` once landed). Ask for or detect the key type first. On the non-spender / instant path, the user pays exactly the instant payment; the owner's cashback is signed.
+15. Coupons only for a described coupon integration: one coupon per transaction; check unspent / unexpired / covers a fresh estimate before broadcasting; a spent, expired or too-low coupon falls back to the internal balance.
 
 ## Reference Examples
 
