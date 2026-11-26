@@ -416,7 +416,7 @@ Apply in this order:
 9. **Other `OTHER_ERROR` / `NOT_ENOUGH_EFFECTIVE_CONNECTION`:** a request error, never broadcast. Fix the request.
 10. **Rejections** (`SIGERROR`, `TOO_BIG`, `CONTRACT_VALIDATE_ERROR`, `BANDWITH_ERROR`, `CONTRACT_EXE_ERROR`, `TRANSACTION_EXPIRATION_ERROR`, `TAPOS_ERROR`): final. Fix the cause; only now may Privy sign a rebuilt transaction.
 
-A low account shows as `transatron.code` `LIMIT_EXCEED` or `NOT_ENOUGH_FUNDS`. Transatron then bypasses the transaction (forwards it without its resources), and the node's outcome above still decides what happened to it. Repeating a broadcast only returns the reply already given.
+A low account shows as `transatron.code` `LIMIT_EXCEED` or `NOT_ENOUGH_FUNDS`. Transatron then bypasses the transaction (forwards it without its resources), and the node's outcome above still decides what happened to it. A repeated broadcast of a transaction Transatron already has is answered `DUP_TRANSACTION_ERROR` (with `transatron.order_id` when the order is known) and is not processed again. Read the outcome from `/api/v1/orders`.
 
 ### Step 2 — Book the fee (backend, Spender key)
 

@@ -187,7 +187,7 @@ Apply in this order:
 9. **Any other `OTHER_ERROR` / `NOT_ENOUGH_EFFECTIVE_CONNECTION`.** A request error: the transaction was never broadcast. Fix the request.
 10. **Rejections.** `SIGERROR`, `TOO_BIG`, `CONTRACT_VALIDATE_ERROR`, `BANDWITH_ERROR`, `CONTRACT_EXE_ERROR`, `TRANSACTION_EXPIRATION_ERROR` and `TAPOS_ERROR` are final: fix the cause and rebuild. Other node codes are handled by rule 1 first, then treated as rejections.
 
-**Never retry because a reply is not final.** None of these is a reason to rebroadcast or re-sign: `is_final` `false` or missing, a `SETTLEMENT_PENDING` reply, or an outcome where every broadcast route failed (rule 1). Re-signing creates a new transaction that can land alongside the first. Repeating a broadcast only returns the reply already given: if that reply had `is_final: false`, the repeat has it too.
+**Never retry because a reply is not final.** None of these is a reason to rebroadcast or re-sign: `is_final` `false` or missing, a `SETTLEMENT_PENDING` reply, or an outcome where every broadcast route failed (rule 1). Re-signing creates a new transaction that can land alongside the first. A repeated broadcast of a transaction Transatron already has is answered `DUP_TRANSACTION_ERROR` (with `transatron.order_id` when the order is known) and is not processed again. Read the outcome from `/api/v1/orders`.
 
 **What you pay.** You pay only for what lands on-chain; the reply code does not decide the charge. A fee may stay **reserved** until the transaction lands or expires, which can be up to 24 hours for a long expiration.
 
