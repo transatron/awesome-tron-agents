@@ -131,7 +131,7 @@ After initial account setup, use Transatron as the **only** RPC endpoint. Mainta
 - **Card/bonus point integration** — company creates coupon, charges user via card or loyalty points off-chain, user redeems coupon on-chain. Decouples blockchain fee payment from the user-facing payment method.
 - Subscription models where platform covers fees
 - B2B scenarios where one entity sponsors another's transactions
-- Reselling energy as a service (buy from Transatron, sell to users at markup)
+- Reselling energy as a service, when the reseller issues coupons to its customers (otherwise see instant payments with cashback)
 
 **Key considerations:**
 - Coupons are time-limited (`valid_to` timestamp) — plan for expiry handling

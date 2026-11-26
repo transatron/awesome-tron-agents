@@ -48,7 +48,7 @@ Use this agent when **both** of these are true:
 
 Typical triggers:
 
-- "Our users sign via Privy — should we use instant, account, or coupon mode on Transatron?"
+- "Our users sign via Privy — should we use account, instant, or coupon mode on Transatron?"
 - "Privy returns a multi-payload signature object from our policy-gated wallet — how should we route that to Transatron?"
 - "We see DelegateResourceContract events in our Privy webhook — should we credit those to user balance?"
 - "We need batch withdrawals from server wallets (Privy) sponsored by Transatron — what's the architecture?"
@@ -66,7 +66,7 @@ The backend holds an authorization key and calls Privy server SDK (`generateAuth
 
 **Shape on your backend:** a single signature string plus a canonical request payload.
 
-**Good pairing:** any Transatron payment mode. This is the simplest surface to combine with Transatron — the broadcast happens server-side, so you can freely insert the Transatron instant-payment transaction, the spender-key account-mode broadcast, or a coupon attachment without coordinating with the browser.
+**Good pairing:** any Transatron payment mode. This is the simplest surface to combine with Transatron — the broadcast happens server-side, so you can freely use the spender-key account-mode broadcast, insert the Transatron instant-payment transaction, or (for a coupon integration) attach a coupon without coordinating with the browser.
 
 **Trade-offs:**
 - Low UX friction — no extra prompts to the user.
@@ -79,7 +79,7 @@ The user signs in the browser via Privy's React SDK or the embedded wallet's `si
 
 **Shape on your backend:** a single signature string, or a fully-signed TRON transaction object.
 
-**Good pairing:** instant mode (best for per-action sponsoring), coupon mode (user redeems a pre-issued coupon), or delayed mode for non-urgent user actions (but see cautions below).
+**Good pairing:** account mode (the user signs; the backend broadcasts with the spender key), instant mode (best for per-action sponsoring), or coupon mode for a coupon integration (user redeems a pre-issued coupon). Delayed mode is a poor match here (session TTL, see [Delayed mode](#delayed-mode)) and needs the key's Delayed transactions setting on.
 
 **Trade-offs:**
 - Wallet authentication happens in the browser — the Privy session has a TTL. Long server-side delays between signing and broadcasting can push you past the session or the transaction's 24-hour expiration window.
@@ -184,7 +184,7 @@ Modes are listed account → instant → coupons. Coupon entries apply only to a
 Browser (Privy) ──sign──▶ Backend ──broadcast via Transatron RPC──▶ TRON
 ```
 
-One signed transaction from the user; backend routes broadcast through Transatron with a non-spender key (instant mode) or spender key (account mode). Cleanest for single user actions.
+One signed transaction from the user; backend routes broadcast through Transatron with a spender key (account mode) or a non-spender key (instant mode). Cleanest for single user actions.
 
 **Choose when:** a single user action per signature, no batching.
 
